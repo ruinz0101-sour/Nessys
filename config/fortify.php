@@ -56,11 +56,12 @@ return [
         'login' => null,
         'logout' => '/login',
         'password-confirmation' => null,
-        'register' => null,
+        'register' => '/files',
         'email-verification' => null,
         'password-reset' => '/login',
     ],
     'features' => [
+        Features::registration(),
         Features::resetPasswords(),
         Features::updatePasswords(),
     ],

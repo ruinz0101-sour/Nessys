@@ -108,6 +108,13 @@ function submit(e) {
             >
                 {form.processing ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
             </button>
+
+            <div class="text-center pt-2 text-xs text-slate-600">
+                ยังไม่มีบัญชีผู้ใช้งาน?
+                <Link href="/register" class="font-semibold text-sky-600 hover:text-sky-700 hover:underline ml-1">
+                    สมัครสมาชิก
+                </Link>
+            </div>
         </form>
 
         <div class="mt-7 pt-4 border-t border-slate-100 flex items-center justify-center gap-2 text-[11px] text-slate-400">

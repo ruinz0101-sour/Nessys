@@ -119,5 +119,56 @@ class AuthAndAdminUserTest extends TestCase
             'email' => 'staff@nas.local',
             'password' => 'secret1234',
         ])->assertRedirect('/files');
+
+        $this->post('/logout');
+
+        // แม้จะมี url.intended ค้างเป็น /settings/profile ก็ต้องพาไปหน้า dashboard/files เสมอ
+        $this->withSession(['url.intended' => url('/settings/profile')])
+            ->post('/login', [
+                'email' => 'admin@nas.local',
+                'password' => 'secret1234',
+            ])->assertRedirect('/admin/dashboard');
+    }
+
+    public function test_guest_can_register_with_email_and_password_and_is_redirected_to_files(): void
+    {
+        $this->get('/register')->assertOk();
+
+        $response = $this->withSession(['url.intended' => url('/settings/profile')])
+            ->post('/register', [
+                'email' => 'newmember@nas.local',
+                'password' => 'secret1234',
+                'password_confirmation' => 'secret1234',
+            ]);
+
+        $response->assertRedirect('/files');
+        $this->assertAuthenticated();
+
+        $user = User::where('email', 'newmember@nas.local')->firstOrFail();
+        $this->assertEquals('newmember', $user->name);
+        $this->assertEquals(UserRole::User, $user->role);
+        $this->assertEquals(10 * 1024 * 1024 * 1024, $user->quota_bytes);
+        $this->assertEquals(0, $user->used_bytes);
+        $this->assertTrue($user->is_active);
+        $this->assertTrue(Hash::check('secret1234', $user->password));
+    }
+
+    public function test_registration_requires_unique_valid_email_and_confirmed_password(): void
+    {
+        User::factory()->create([
+            'email' => 'existing@nas.local',
+        ]);
+
+        $this->post('/register', [
+            'email' => 'existing@nas.local',
+            'password' => 'secret1234',
+            'password_confirmation' => 'secret1234',
+        ])->assertSessionHasErrors('email');
+
+        $this->post('/register', [
+            'email' => 'another@nas.local',
+            'password' => 'secret1234',
+            'password_confirmation' => 'mismatch',
+        ])->assertSessionHasErrors('password');
     }
 }

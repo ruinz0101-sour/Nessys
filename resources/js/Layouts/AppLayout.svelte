@@ -175,35 +175,6 @@ function markOneRead(n) {
                 </span>
                 <span>ถังขยะ</span>
             </Link>
-
-            <div class="px-3 pt-4 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                บัญชีผู้ใช้
-            </div>
-
-            <Link
-                href="/settings/profile"
-                class="px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all duration-200 {currentUrl.startsWith('/settings/profile') ? 'bg-gradient-to-r from-sky-500/20 to-indigo-500/10 text-white font-semibold border border-sky-400/30 shadow-xs' : 'text-slate-300 hover:bg-slate-800/80 hover:text-white border border-transparent'}"
-            >
-                <span class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 {currentUrl.startsWith('/settings/profile') ? 'bg-sky-500/25 text-sky-300' : 'bg-slate-800/80 text-slate-400'}">
-                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-                        <circle cx="12" cy="7" r="4" />
-                    </svg>
-                </span>
-                <span>แก้ไขโปรไฟล์</span>
-            </Link>
-
-            <Link
-                href="/settings/password"
-                class="px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all duration-200 {currentUrl.startsWith('/settings/password') ? 'bg-gradient-to-r from-sky-500/20 to-indigo-500/10 text-white font-semibold border border-sky-400/30 shadow-xs' : 'text-slate-300 hover:bg-slate-800/80 hover:text-white border border-transparent'}"
-            >
-                <span class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 {currentUrl.startsWith('/settings/password') ? 'bg-sky-500/25 text-sky-300' : 'bg-slate-800/80 text-slate-400'}">
-                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-                    </svg>
-                </span>
-                <span>เปลี่ยนรหัสผ่าน</span>
-            </Link>
         </nav>
 
         <!-- Quota Progress Indicator -->

@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Actions\Fortify\CreateNewUser;
 use App\Actions\Fortify\ResetUserPassword;
 use App\Actions\Fortify\UpdateUserPassword;
 use App\Enums\UserRole;
@@ -18,6 +19,7 @@ use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response as InertiaResponse;
 use Laravel\Fortify\Contracts\LoginResponse as LoginResponseContract;
+use Laravel\Fortify\Contracts\RegisterResponse as RegisterResponseContract;
 use Laravel\Fortify\Fortify;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -37,6 +39,10 @@ class FortifyServiceProvider extends ServiceProvider
             {
                 public function toResponse($request): Response
                 {
+                    if ($request->hasSession()) {
+                        $request->session()->forget('url.intended');
+                    }
+
                     $user = $request->user();
                     $home = $user?->role === UserRole::Admin
                         ? '/admin/dashboard'
@@ -44,7 +50,27 @@ class FortifyServiceProvider extends ServiceProvider
 
                     return $request->wantsJson()
                         ? new JsonResponse('', 204)
-                        : redirect()->intended($home);
+                        : redirect()->to($home);
+                }
+            };
+        });
+        $this->app->singleton(RegisterResponseContract::class, function (): RegisterResponseContract {
+            return new class implements RegisterResponseContract
+            {
+                public function toResponse($request): Response
+                {
+                    if ($request->hasSession()) {
+                        $request->session()->forget('url.intended');
+                    }
+
+                    $user = $request->user();
+                    $home = $user?->role === UserRole::Admin
+                        ? '/admin/dashboard'
+                        : '/files';
+
+                    return $request->wantsJson()
+                        ? new JsonResponse('', 201)
+                        : redirect()->to($home);
                 }
             };
         });
@@ -55,12 +81,15 @@ class FortifyServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Fortify::createUsersUsing(CreateNewUser::class);
         Fortify::updateUserPasswordsUsing(UpdateUserPassword::class);
         Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
 
         Fortify::loginView(fn (): InertiaResponse => Inertia::render('Auth/Login', [
             'status' => session('status'),
         ]));
+
+        Fortify::registerView(fn (): InertiaResponse => Inertia::render('Auth/Register'));
 
         Fortify::requestPasswordResetLinkView(fn (): InertiaResponse => Inertia::render('Auth/ForgotPassword', [
             'status' => session('status'),
