@@ -232,7 +232,7 @@ function formatDateTime(iso) {
                     >
                         <option value="">ทุกคน</option>
                         {#each users as u (u.id)}
-                            <option value={String(u.id)}>{u.name} ({u.email})</option>
+                            <option value={String(u.id)}>{u.name}</option>
                         {/each}
                     </select>
                 </div>
