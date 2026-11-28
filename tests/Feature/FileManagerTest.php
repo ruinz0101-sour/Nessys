@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\FileCategory;
 use App\Enums\RootType;
+use App\Models\AuditLog;
 use App\Models\Node;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -139,6 +140,62 @@ class FileManagerTest extends TestCase
         $this->actingAs($stranger)
             ->get("/files/{$node->uuid}/download")
             ->assertForbidden();
+    }
+
+    public function test_download_supports_http_range_resume_and_etag_without_duplicate_audit_logs(): void
+    {
+        Storage::fake('local');
+
+        $owner = User::factory()->create();
+        $content = '0123456789ABCDEF';
+        $uploaded = UploadedFile::fake()->createWithContent('รายงาน-backup.bin', $content);
+
+        $this->actingAs($owner)->post('/files/upload', [
+            'files' => [$uploaded],
+            'root_type' => RootType::Personal->value,
+            'parent_id' => null,
+        ])->assertSessionHasNoErrors();
+
+        $node = Node::where('name', 'รายงาน-backup.bin')->firstOrFail();
+
+        // ดาวน์โหลดปกติครั้งแรก -> ได้ 200 OK พร้อม Accept-Ranges และ ETag
+        $fullResponse = $this->actingAs($owner)
+            ->get("/files/{$node->uuid}/download");
+
+        $fullResponse->assertOk();
+        $fullResponse->assertHeader('Accept-Ranges', 'bytes');
+        $fullResponse->assertHeader('ETag', "\"{$node->sha256}\"");
+        $this->assertSame($content, $fullResponse->streamedContent());
+
+        // ดาวน์โหลดต่อจากจุดที่ค้าง (Range + If-Range ตรงกับ ETag) -> ได้ 206 Partial Content
+        $resumeResponse = $this->actingAs($owner)
+            ->withHeaders([
+                'Range' => 'bytes=10-15',
+                'If-Range' => "\"{$node->sha256}\"",
+            ])
+            ->get("/files/{$node->uuid}/download");
+
+        $resumeResponse->assertStatus(206);
+        $resumeResponse->assertHeader('Accept-Ranges', 'bytes');
+        $resumeResponse->assertHeader('Content-Range', 'bytes 10-15/16');
+        $this->assertSame('ABCDEF', $resumeResponse->streamedContent());
+
+        // การขอโหลดต่อ (bytes=10-15) ต้องไม่สร้าง AuditLog ซ้ำ
+        $this->assertSame(
+            1,
+            AuditLog::where('node_id', $node->id)->where('action', 'download')->count()
+        );
+
+        // หาก If-Range ไม่ตรง (ไฟล์ถูกเปลี่ยน) -> ต้องคืน 200 OK เต็มไฟล์แทน 206
+        $staleRangeResponse = $this->actingAs($owner)
+            ->withHeaders([
+                'Range' => 'bytes=10-15',
+                'If-Range' => '"outdated-etag"',
+            ])
+            ->get("/files/{$node->uuid}/download");
+
+        $staleRangeResponse->assertOk();
+        $this->assertSame($content, $staleRangeResponse->streamedContent());
     }
 
     public function test_trash_soft_delete_restore_scheduled_purge_and_quota_recalculation(): void

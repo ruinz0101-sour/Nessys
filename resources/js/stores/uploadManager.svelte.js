@@ -1,6 +1,7 @@
 import { router } from '@inertiajs/svelte';
 
 const MAX_CHUNK_RETRIES = 5;
+const UI_PROGRESS_THROTTLE_MS = 200;
 
 function getChunkSizeForFile(fileSize) {
     if (fileSize > 2 * 1024 * 1024 * 1024) {
@@ -87,7 +88,10 @@ function getActiveElapsedMs() {
 function updateTimingMetrics() {
     const activeMs = getActiveElapsedMs();
     const activeSec = activeMs / 1000;
-    uploadState.elapsedSeconds = Math.floor(activeSec);
+    const elapsedSec = Math.floor(activeSec);
+    if (uploadState.elapsedSeconds !== elapsedSec) {
+        uploadState.elapsedSeconds = elapsedSec;
+    }
 
     if (uploadState.status !== 'uploading') {
         return;
@@ -101,7 +105,11 @@ function updateTimingMetrics() {
         if (speed > 0) {
             const remainingSec = Math.ceil(remainingBytes / speed);
             uploadState.remainingSeconds = remainingSec;
-            uploadState.estimatedFinishAt = Date.now() + remainingSec * 1000;
+            // ปัดเวลาคาดว่าจะเสร็จเป็นระดับวินาที เพื่อไม่ให้ UI ฟอร์แมตเวลาใหม่ซ้ำๆ ทุกมิลลิวินาที
+            const roundedFinishAt = Math.floor((Date.now() + remainingSec * 1000) / 1000) * 1000;
+            if (uploadState.estimatedFinishAt !== roundedFinishAt) {
+                uploadState.estimatedFinishAt = roundedFinishAt;
+            }
         }
     }
 }
@@ -482,11 +490,18 @@ export async function startUpload(
             const totalChunks = Math.max(1, Math.ceil((file.size || 0) / chunkSizeBytes));
             const isMultiChunk = totalChunks > 1;
             const chunkLoadedMap = new Map();
+            let lastUiUpdateAt = 0;
 
-            const updateProgress = () => {
+            const updateProgress = (force = false) => {
                 if (uploadCancelled || uploadPaused) {
                     return;
                 }
+                const now = performance.now();
+                if (!force && (now - lastUiUpdateAt) < UI_PROGRESS_THROTTLE_MS) {
+                    return;
+                }
+                lastUiUpdateAt = now;
+
                 let inFlightBytes = 0;
                 for (const bytes of chunkLoadedMap.values()) {
                     inFlightBytes += bytes;
@@ -494,10 +509,16 @@ export async function startUpload(
                 const currentLoaded = Math.min(totalSize, completedFilesBytes + inFlightBytes);
                 // คงค่า % ไม่ให้ถอยหลังเมื่อกดหยุดชั่วคราวและกดอัปโหลดต่อ
                 const monotonicLoaded = Math.max(uploadState.loadedBytes, currentLoaded);
-                uploadState.loadedBytes = monotonicLoaded;
-                uploadState.percentage = totalSize > 0
+                const nextPercentage = totalSize > 0
                     ? Math.min(100, Math.round((monotonicLoaded / totalSize) * 100))
                     : 100;
+
+                if (uploadState.loadedBytes !== monotonicLoaded) {
+                    uploadState.loadedBytes = monotonicLoaded;
+                }
+                if (uploadState.percentage !== nextPercentage) {
+                    uploadState.percentage = nextPercentage;
+                }
 
                 updateTimingMetrics();
             };
@@ -545,7 +566,7 @@ export async function startUpload(
                         });
 
                         chunkLoadedMap.set(chunkIndex, chunkSize);
-                        updateProgress();
+                        updateProgress(true);
                         return;
                     } catch (err) {
                         if (err?.paused && !uploadCancelled) {

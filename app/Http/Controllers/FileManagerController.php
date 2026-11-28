@@ -25,8 +25,8 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response as InertiaResponse;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class FileManagerController extends Controller
 {
@@ -866,7 +866,7 @@ class FileManagerController extends Controller
         return back()->with('success', "ย้าย {$node->name} เรียบร้อยแล้ว");
     }
 
-    public function download(Request $request, Node $node): StreamedResponse
+    public function download(Request $request, Node $node): BinaryFileResponse
     {
         Gate::authorize('download', $node);
 
@@ -878,21 +878,38 @@ class FileManagerController extends Controller
             abort(404, 'ไม่พบไฟล์บนดิสก์');
         }
 
-        AuditLog::create([
-            'user_id' => $request->user()?->id,
-            'action' => 'download',
-            'node_id' => $node->id,
-            'node_name' => $node->name,
-            'ip' => $request->ip(),
-            'user_agent' => Str::limit((string) $request->userAgent(), 255, ''),
-            'created_at' => now(),
-        ]);
+        $rangeHeader = $request->header('Range');
+        if ($rangeHeader === null || str_starts_with($rangeHeader, 'bytes=0-')) {
+            AuditLog::create([
+                'user_id' => $request->user()?->id,
+                'action' => 'download',
+                'node_id' => $node->id,
+                'node_name' => $node->name,
+                'ip' => $request->ip(),
+                'user_agent' => Str::limit((string) $request->userAgent(), 255, ''),
+                'created_at' => now(),
+            ]);
+        }
 
-        return Storage::disk('local')->download(
-            $node->storage_path,
+        $fullPath = Storage::disk('local')->path($node->storage_path);
+        $response = response()->download(
+            $fullPath,
             $node->name,
-            ['Content-Type' => $node->mime_type ?? 'application/octet-stream']
+            [
+                'Content-Type' => $node->mime_type ?? 'application/octet-stream',
+                'Accept-Ranges' => 'bytes',
+            ]
         );
+
+        if ($node->sha256 !== null && $node->sha256 !== '') {
+            $response->setEtag($node->sha256);
+        } else {
+            $response->setAutoEtag();
+        }
+
+        $response->setAutoLastModified();
+
+        return $response;
     }
 
     public function preview(Request $request, Node $node): SymfonyResponse

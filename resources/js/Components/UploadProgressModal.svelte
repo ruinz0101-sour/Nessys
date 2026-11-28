@@ -73,17 +73,19 @@ function formatDuration(totalSec) {
     return `${seconds} วินาที`;
 }
 
+const thaiClockFormatter = new Intl.DateTimeFormat('th-TH', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+});
+
 function formatClockTime(timestampMs) {
     if (!timestampMs) {
         return '--:--:--';
     }
     try {
-        return `${new Date(timestampMs).toLocaleTimeString('th-TH', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: false,
-        })} น.`;
+        return `${thaiClockFormatter.format(timestampMs)} น.`;
     } catch {
         return '--:--:--';
     }
@@ -111,7 +113,7 @@ function isImageFile(file) {
     >
         {#if minimized}
             <!-- Compact Minimized Bar -->
-            <div class="bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/90 shadow-2xl shadow-slate-900/20 overflow-hidden animate-fade-up">
+            <div class="bg-white rounded-2xl border border-slate-200/90 shadow-2xl shadow-slate-900/20 overflow-hidden animate-fade-up">
                 <div class="px-4 py-3 flex items-center justify-between gap-3">
                     <button
                         type="button"
@@ -232,7 +234,7 @@ function isImageFile(file) {
                 <!-- Thin bottom progress bar -->
                 <div class="w-full h-1 bg-slate-100">
                     <div
-                        class="h-full transition-all duration-200 {status === 'success' ? 'bg-emerald-500' : status === 'error' || isQuotaExceeded ? 'bg-rose-500' : isPaused ? 'bg-amber-400' : 'bg-gradient-to-r from-amber-400 to-orange-600'}"
+                        class="h-full transition-[width] duration-200 {status === 'success' ? 'bg-emerald-500' : status === 'error' || isQuotaExceeded ? 'bg-rose-500' : isPaused ? 'bg-amber-400' : 'bg-gradient-to-r from-amber-400 to-orange-600'}"
                         style="width: {status === 'success' ? 100 : clampedPercentage}%"
                     ></div>
                 </div>
@@ -400,7 +402,7 @@ function isImageFile(file) {
                             <!-- Progress Bar -->
                             <div class="w-full h-3 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
                                 <div
-                                    class="h-full rounded-full transition-all duration-200 ease-out {status === 'success' ? 'bg-gradient-to-r from-emerald-500 to-teal-500' : status === 'error' ? 'bg-rose-500' : isPaused ? 'bg-amber-400' : 'bg-gradient-to-r from-amber-400 via-orange-500 to-orange-600'} {isSavingOnServer ? 'animate-pulse' : ''}"
+                                    class="h-full rounded-full transition-[width] duration-200 ease-out {status === 'success' ? 'bg-gradient-to-r from-emerald-500 to-teal-500' : status === 'error' ? 'bg-rose-500' : isPaused ? 'bg-amber-400' : 'bg-gradient-to-r from-amber-400 via-orange-500 to-orange-600'} {isSavingOnServer ? 'animate-pulse' : ''}"
                                     style="width: {status === 'success' ? 100 : clampedPercentage}%"
                                 ></div>
                             </div>
