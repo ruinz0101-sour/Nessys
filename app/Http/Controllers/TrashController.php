@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\NodeType;
+use App\Enums\RootType;
 use App\Enums\UserRole;
 use App\Models\AuditLog;
 use App\Models\Node;
@@ -98,6 +99,12 @@ class TrashController extends Controller
             ->whereNull('deleted_at')
             ->where('parent_id', $node->parent_id)
             ->where('root_type', $node->root_type)
+            ->when($node->parent_id === null && $node->root_type === RootType::Personal, function ($query) use ($node): void {
+                $query->where('owner_id', $node->owner_id);
+            })
+            ->when($node->parent_id === null && $node->root_type === RootType::Department && $node->department_id !== null, function ($query) use ($node): void {
+                $query->where('department_id', $node->department_id);
+            })
             ->where('name', $node->name)
             ->where('id', '!=', $node->id)
             ->exists();

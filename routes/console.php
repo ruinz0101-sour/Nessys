@@ -19,3 +19,7 @@ Schedule::command('nas:recalculate-quotas')
 Schedule::command('nas:remind-access-requests')
     ->dailyAt('08:00')
     ->withoutOverlapping();
+
+Schedule::command('nas:cleanup-chunks')
+    ->dailyAt('03:00')
+    ->withoutOverlapping();

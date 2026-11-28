@@ -4,10 +4,17 @@ import { useForm } from '@inertiajs/svelte';
 let { token, email = '' } = $props();
 
 const form = useForm({
-    token: token ?? '',
-    email: email ?? '',
+    token: '',
+    email: '',
     password: '',
     password_confirmation: '',
+});
+
+$effect(() => {
+    form.token = token ?? '';
+    if (!form.email && email) {
+        form.email = email;
+    }
 });
 
 function submit(e) {

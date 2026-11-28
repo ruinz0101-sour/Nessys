@@ -28,6 +28,45 @@ let viewMode = $state('list'); // 'list' | 'grid'
 let searchInput = $state('');
 let categoryInput = $state('');
 let previewingFile = $state(null);
+let openMenuNode = $state(null);
+let menuPos = $state({ top: 0, right: 0 });
+
+function portal(el) {
+    document.body.appendChild(el);
+    return {
+        destroy() {
+            el.remove();
+        },
+    };
+}
+
+function toggleNodeMenu(node, event) {
+    event.stopPropagation();
+    if (openMenuNode?.id === node.id) {
+        openMenuNode = null;
+        return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuHeight = (node.can_edit ? 76 : 0) + (node.can_delete ? 44 : 0) + 16;
+    const openUpward = window.innerHeight - rect.bottom < menuHeight + 12 && rect.top > menuHeight + 12;
+    menuPos = {
+        top: openUpward ? Math.max(8, rect.top - menuHeight - 4) : rect.bottom + 4,
+        right: Math.max(8, window.innerWidth - rect.right),
+    };
+    openMenuNode = node;
+}
+
+function closeNodeMenu() {
+    if (openMenuNode) {
+        openMenuNode = null;
+    }
+}
+
+function handleWindowKeydown(event) {
+    if (event.key === 'Escape' && openMenuNode) {
+        openMenuNode = null;
+    }
+}
 
 function openPreview(node) {
     if (!node || node.type === 'folder') {
@@ -453,6 +492,8 @@ function categoryBadge(cat) {
     return { label: 'ไฟล์ทั่วไป', cls: 'bg-[#F3F4F6] text-[#4B5563] border border-[#D1D5DB]' };
 }
 </script>
+
+<svelte:window onclick={closeNodeMenu} onkeydown={handleWindowKeydown} onscroll={closeNodeMenu} onresize={closeNodeMenu} />
 
 <AppLayout title="จัดการไฟล์และโฟลเดอร์">
     <div class="flex flex-col gap-5">
@@ -938,29 +979,21 @@ function categoryBadge(cat) {
                                                         แชร์
                                                     </button>
                                                 {/if}
-                                                {#if node.can_edit}
+                                                {#if node.can_edit || node.can_delete}
                                                     <button
                                                         type="button"
-                                                        onclick={() => openRenameModal(node)}
-                                                        class="px-2.5 py-1 rounded-[3px] text-[11px] font-medium bg-[#F3F4F6] hover:bg-[#E5E7EB] text-[#232F3E] border border-[#DDDDDD] transition cursor-pointer"
+                                                        onclick={(e) => toggleNodeMenu(node, e)}
+                                                        aria-label="ตัวเลือกเพิ่มเติม"
+                                                        aria-haspopup="menu"
+                                                        aria-expanded={openMenuNode?.id === node.id}
+                                                        title="ตัวเลือกเพิ่มเติม"
+                                                        class="p-1.5 rounded-[3px] text-[#555555] hover:text-[#131921] hover:bg-[#F3F4F6] border border-transparent hover:border-[#DDDDDD] transition cursor-pointer {openMenuNode?.id === node.id ? 'bg-[#F3F4F6] border-[#DDDDDD] text-[#131921]' : ''}"
                                                     >
-                                                        เปลี่ยนชื่อ
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onclick={() => openMoveModal(node)}
-                                                        class="px-2.5 py-1 rounded-[3px] text-[11px] font-medium bg-[#F3F4F6] hover:bg-[#E5E7EB] text-[#232F3E] border border-[#DDDDDD] transition cursor-pointer"
-                                                    >
-                                                        ย้าย
-                                                    </button>
-                                                {/if}
-                                                {#if node.can_delete}
-                                                    <button
-                                                        type="button"
-                                                        onclick={() => moveToTrash(node)}
-                                                        class="px-2.5 py-1 rounded-[3px] text-[11px] font-medium bg-[#FEF2F2] hover:bg-[#FEE2E2] text-[#B91C1C] border border-[#E53E3E]/30 transition cursor-pointer"
-                                                    >
-                                                        ลบ
+                                                        <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                                                            <circle cx="5" cy="12" r="1.75" />
+                                                            <circle cx="12" cy="12" r="1.75" />
+                                                            <circle cx="19" cy="12" r="1.75" />
+                                                        </svg>
                                                     </button>
                                                 {/if}
                                             </div>
@@ -1052,22 +1085,21 @@ function categoryBadge(cat) {
                                                 แชร์
                                             </button>
                                         {/if}
-                                        {#if node.can_edit}
+                                        {#if node.can_edit || node.can_delete}
                                             <button
                                                 type="button"
-                                                onclick={() => openRenameModal(node)}
-                                                class="text-[11px] font-medium text-[#555555] hover:text-[#131921] cursor-pointer"
+                                                onclick={(e) => toggleNodeMenu(node, e)}
+                                                aria-label="ตัวเลือกเพิ่มเติม"
+                                                aria-haspopup="menu"
+                                                aria-expanded={openMenuNode?.id === node.id}
+                                                title="ตัวเลือกเพิ่มเติม"
+                                                class="p-1 rounded-md text-[#555555] hover:text-[#131921] hover:bg-[#F3F4F6] transition cursor-pointer {openMenuNode?.id === node.id ? 'bg-[#F3F4F6] text-[#131921]' : ''}"
                                             >
-                                                เปลี่ยนชื่อ
-                                            </button>
-                                        {/if}
-                                        {#if node.can_delete}
-                                            <button
-                                                type="button"
-                                                onclick={() => moveToTrash(node)}
-                                                class="text-[11px] font-medium text-[#B91C1C] hover:underline cursor-pointer"
-                                            >
-                                                ลบ
+                                                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                                                    <circle cx="5" cy="12" r="1.75" />
+                                                    <circle cx="12" cy="12" r="1.75" />
+                                                    <circle cx="19" cy="12" r="1.75" />
+                                                </svg>
                                             </button>
                                         {/if}
                                     </div>
@@ -1079,6 +1111,77 @@ function categoryBadge(cat) {
             </div>
         </div>
     </div>
+
+    <!-- Floating More Actions Menu (...) -->
+    {#if openMenuNode}
+        <div
+            use:portal
+            role="menu"
+            tabindex="-1"
+            onclick={(e) => e.stopPropagation()}
+            onkeydown={handleWindowKeydown}
+            style="top: {menuPos.top}px; right: {menuPos.right}px;"
+            class="fixed z-50 w-40 bg-white rounded-xl border border-slate-200/90 shadow-xl shadow-slate-900/15 py-1.5 text-xs animate-fade-up"
+        >
+            {#if openMenuNode.can_edit}
+                <button
+                    type="button"
+                    role="menuitem"
+                    onclick={() => {
+                        const target = openMenuNode;
+                        openMenuNode = null;
+                        openRenameModal(target);
+                    }}
+                    class="w-full px-3.5 py-2 text-left text-slate-700 hover:bg-slate-50 hover:text-slate-950 font-medium flex items-center gap-2.5 transition cursor-pointer"
+                >
+                    <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                        <path d="m15 5 4 4" />
+                    </svg>
+                    <span>เปลี่ยนชื่อ</span>
+                </button>
+                <button
+                    type="button"
+                    role="menuitem"
+                    onclick={() => {
+                        const target = openMenuNode;
+                        openMenuNode = null;
+                        openMoveModal(target);
+                    }}
+                    class="w-full px-3.5 py-2 text-left text-slate-700 hover:bg-slate-50 hover:text-slate-950 font-medium flex items-center gap-2.5 transition cursor-pointer"
+                >
+                    <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+                        <path d="M12 10v6" />
+                        <path d="m15 13-3 3-3-3" />
+                    </svg>
+                    <span>ย้ายตำแหน่ง</span>
+                </button>
+            {/if}
+            {#if openMenuNode.can_edit && openMenuNode.can_delete}
+                <div class="my-1 border-t border-slate-100"></div>
+            {/if}
+            {#if openMenuNode.can_delete}
+                <button
+                    type="button"
+                    role="menuitem"
+                    onclick={() => {
+                        const target = openMenuNode;
+                        openMenuNode = null;
+                        moveToTrash(target);
+                    }}
+                    class="w-full px-3.5 py-2 text-left text-rose-600 hover:bg-rose-50 hover:text-rose-700 font-semibold flex items-center gap-2.5 transition cursor-pointer"
+                >
+                    <svg class="w-3.5 h-3.5 text-rose-500 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 6h18" />
+                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                    </svg>
+                    <span>ลบ</span>
+                </button>
+            {/if}
+        </div>
+    {/if}
 
     <!-- Modal: สร้างโฟลเดอร์ -->
     {#if showFolderModal}
