@@ -1,0 +1,61 @@
+{
+    "_comment": "Laravel FTP Deployer Configuration for NAS CloudStorage",
+    "exclude": {
+        "files": [
+            ".env",
+            ".env.prod",
+            ".env.production",
+            ".gitignore",
+            "README.md",
+            "deploy.json",
+            ".deploy_manifest.json",
+            "public/hot",
+            "nasdb.sql"
+        ],
+        "directories": [
+            ".git",
+            ".agents",
+            ".claude",
+            "node_modules",
+            "vendor",
+            "storage/app/private/files",
+            "storage/app/private/chunks",
+            "storage/app/private/avatars",
+            "storage/inertia-devtools",
+            "storage/framework/cache",
+            "storage/framework/sessions",
+            "storage/framework/views",
+            "storage/logs",
+            "tests"
+        ]
+    },
+    "pre_deployment_commands": [
+        "npm.cmd run build"
+    ],
+    "post_extraction_commands": [
+        "config:clear",
+        "cache:clear",
+        "view:clear",
+        "route:clear",
+        "migrate --force",
+        "config:cache",
+        "route:cache",
+        "view:cache",
+        "up"
+    ],
+    "custom_commands": {
+        "cache-clear": [
+            "optimize:clear"
+        ],
+        "db-migrate": [
+            "migrate --force"
+        ],
+        "db-seed": [
+            "db:seed --force"
+        ],
+        "optimize": [
+            "optimize:clear",
+            "optimize"
+        ]
+    }
+}

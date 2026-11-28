@@ -1,14 +1,12 @@
 import { router } from '@inertiajs/svelte';
 
-const MAX_CHUNK_RETRIES = 5;
+const MAX_CHUNK_RETRIES = 6;
+const CHUNK_TIMEOUT_MS = 60000;
 const UI_PROGRESS_THROTTLE_MS = 200;
 
 function getChunkSizeForFile(fileSize) {
-    if (fileSize > 2 * 1024 * 1024 * 1024) {
-        return 16 * 1024 * 1024; // > 2 GB: ชิ้นละ 16 MB
-    }
     if (fileSize > 200 * 1024 * 1024) {
-        return 8 * 1024 * 1024; // > 200 MB: ชิ้นละ 8 MB (ลดจำนวน HTTP request สำหรับไฟล์ระดับ GB)
+        return 4 * 1024 * 1024; // > 200 MB: ชิ้นละ 4 MB (ส่งจบไว ลดโอกาสโดน timeout บนเซิร์ฟเวอร์จริง)
     }
     return 2 * 1024 * 1024; // <= 200 MB: ชิ้นละ 2 MB (หยุด/ทำต่อได้ละเอียด)
 }
@@ -25,7 +23,7 @@ function isRetryableError(err) {
         return true;
     }
     const status = err.status;
-    return status === 408 || status === 429 || status === 502 || status === 503 || status === 504;
+    return status === 408 || status === 429 || status === 502 || status === 503 || status === 504 || (status >= 520 && status <= 524);
 }
 
 export const uploadState = $state({
@@ -67,6 +65,17 @@ let segmentStartedAt = null;
 function getXsrfToken() {
     const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : '';
+}
+
+function isOnFilesPage() {
+    const basePath = (
+        document.querySelector('meta[name="app-base-path"]')?.getAttribute('content') || ''
+    ).replace(/\/+$/, '');
+    let path = window.location.pathname.replace(/\/+$/, '') || '/';
+    if (basePath && (path === basePath || path.startsWith(`${basePath}/`))) {
+        path = path.slice(basePath.length) || '/';
+    }
+    return path === '/files' || path === '/';
 }
 
 function generateUploadId() {
@@ -156,6 +165,7 @@ function sendChunkRequest(formData, onChunkProgress) {
         activeUploadXhrs.add(xhr);
 
         xhr.open('POST', '/files/upload/chunk', true);
+        xhr.timeout = CHUNK_TIMEOUT_MS;
         xhr.setRequestHeader('Accept', 'application/json');
         xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
         const xsrf = getXsrfToken();
@@ -197,6 +207,13 @@ function sendChunkRequest(formData, onChunkProgress) {
         xhr.onerror = () => {
             activeUploadXhrs.delete(xhr);
             const err = new Error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่อีกครั้ง');
+            err.networkError = true;
+            reject(err);
+        };
+
+        xhr.ontimeout = () => {
+            activeUploadXhrs.delete(xhr);
+            const err = new Error('การส่งข้อมูลชิ้นส่วนไฟล์ใช้เวลานานเกินกำหนด กำลังลองใหม่อัตโนมัติ');
             err.networkError = true;
             reject(err);
         };
@@ -685,7 +702,7 @@ async function executeUploadSession(
         }
 
         if (uploadCancelled) {
-            if (uploadedCount > 0 && window.location.pathname === '/files') {
+            if (uploadedCount > 0 && isOnFilesPage()) {
                 router.reload({ preserveScroll: true });
             }
             return;
@@ -702,7 +719,7 @@ async function executeUploadSession(
         uploadState.percentage = 100;
         uploadState.loadedBytes = uploadState.totalBytes;
 
-        if (window.location.pathname === '/files') {
+        if (isOnFilesPage()) {
             if (onSuccessExtra) {
                 onSuccessExtra();
             } else {
@@ -720,7 +737,7 @@ async function executeUploadSession(
     } catch (err) {
         stopTimingTicker();
         if (err?.cancelled || uploadCancelled) {
-            if (uploadedCount > 0 && window.location.pathname === '/files') {
+            if (uploadedCount > 0 && isOnFilesPage()) {
                 router.reload({ preserveScroll: true });
             }
             return;
@@ -763,7 +780,7 @@ async function executeUploadSession(
             uploadState.minimized = false;
         }
 
-        if (uploadedCount > 0 && window.location.pathname === '/files') {
+        if (uploadedCount > 0 && isOnFilesPage()) {
             router.reload({ preserveScroll: true });
         }
     } finally {

@@ -630,7 +630,7 @@ class FileManagerController extends Controller
             $extension = Str::lower(pathinfo($originalName, PATHINFO_EXTENSION));
             $realMime = $this->detectMimeTypeFromPath($partPath);
             $category = $this->resolveFileCategory($realMime, $extension);
-            $sha256 = hash_file('sha256', $partPath) ?: hash('sha256', $uuid);
+            $sha256 = $this->computeFastFileHash($partPath, $actualSize, $uuid);
             $diskFilename = $this->resolveUniqueDiskFilename($originalName);
             $storagePath = "files/{$diskFilename}";
             $finalPath = Storage::disk('local')->path($storagePath);
@@ -1072,6 +1072,39 @@ class FileManagerController extends Controller
         }
 
         return [$requestedRootType, $departmentId];
+    }
+
+    protected function computeFastFileHash(string $path, int $sizeBytes, string $fallbackUuid): string
+    {
+        // สำหรับไฟล์ <= 256 MB คำนวณ SHA-256 เต็มไฟล์, ไฟล์ใหญ่กว่านั้นใช้หัว+ท้าย+ขนาด เพื่อไม่ให้โดน timeout บน shared hosting
+        if ($sizeBytes <= 268435456) {
+            return hash_file('sha256', $path) ?: hash('sha256', $fallbackUuid);
+        }
+
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            return hash('sha256', "{$fallbackUuid}|{$sizeBytes}");
+        }
+
+        try {
+            $ctx = hash_init('sha256');
+            hash_update($ctx, (string) $sizeBytes);
+            $head = fread($handle, 4194304);
+            if (is_string($head)) {
+                hash_update($ctx, $head);
+            }
+            if ($sizeBytes > 8388608) {
+                fseek($handle, max(0, $sizeBytes - 4194304));
+                $tail = fread($handle, 4194304);
+                if (is_string($tail)) {
+                    hash_update($ctx, $tail);
+                }
+            }
+
+            return hash_final($ctx);
+        } finally {
+            fclose($handle);
+        }
     }
 
     protected function detectRealMimeType(UploadedFile $file): string

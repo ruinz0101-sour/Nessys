@@ -101,7 +101,7 @@ function markOneRead(n) {
                 </div>
                 <div>
                     <div class="font-bold text-sm tracking-tight text-white">
-                        CloudStorage
+                        NAS Storage
                     </div>
                     <div class="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
                         <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
