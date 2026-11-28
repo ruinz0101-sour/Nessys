@@ -16,8 +16,12 @@ use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response as InertiaResponse;
 
+/**
+ * จัดการถังขยะ: แสดงรายการ, ย้ายลงถังขยะ (soft delete), กู้คืน และลบถาวร
+ */
 class TrashController extends Controller
 {
+    /** จำนวนวันที่เก็บไฟล์ไว้ในถังขยะก่อนถูกลบถาวรอัตโนมัติ (โดยคำสั่ง nas:purge-trash) */
     public const int TRASH_RETENTION_DAYS = 30;
 
     public function index(Request $request): InertiaResponse

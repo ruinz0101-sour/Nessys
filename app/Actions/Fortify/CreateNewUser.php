@@ -12,10 +12,15 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Laravel\Fortify\Contracts\CreatesNewUsers;
 
+/**
+ * จัดการการสมัครสมาชิกใหม่จากหน้า /register (Fortify).
+ * แก้ไขค่าเริ่มต้นของผู้ใช้ใหม่ เช่น โควต้า, บทบาท (role) หรือการกำหนดแผนกได้ที่ไฟล์นี้
+ */
 class CreateNewUser implements CreatesNewUsers
 {
     use PasswordValidationRules;
 
+    /** โควต้าพื้นที่จัดเก็บเริ่มต้นสำหรับผู้ใช้ที่สมัครเอง (10 GB) */
     public const int DEFAULT_QUOTA_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
 
     /**
@@ -45,6 +50,7 @@ class CreateNewUser implements CreatesNewUsers
             ? $rawName
             : Str::limit((string) Str::before($email, '@'), 150, '');
 
+        // ค่าเริ่มต้นตอนสมัครสมาชิกเอง: role = user, ยังไม่มีแผนก (department_id = null ให้ Admin กำหนดภายหลัง)
         $user = User::create([
             'name' => $name !== '' ? $name : 'User',
             'email' => $email,

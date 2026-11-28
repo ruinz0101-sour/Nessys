@@ -86,6 +86,9 @@ class UserController extends Controller
         ]);
     }
 
+    /**
+     * สร้างบัญชีผู้ใช้ใหม่โดย Admin (สามารถกำหนด role, แผนก และโควต้าได้ทันที)
+     */
     public function store(StoreUserRequest $request): RedirectResponse
     {
         $validated = $request->validated();
@@ -120,6 +123,9 @@ class UserController extends Controller
         return back()->with('success', "สร้างบัญชีผู้ใช้ {$user->name} เรียบร้อยแล้ว");
     }
 
+    /**
+     * แก้ไขข้อมูลผู้ใช้โดย Admin (รวมถึงการกำหนดหรือย้ายแผนก department_id และปรับโควต้า)
+     */
     public function update(UpdateUserRequest $request, User $user): RedirectResponse
     {
         $validated = $request->validated();

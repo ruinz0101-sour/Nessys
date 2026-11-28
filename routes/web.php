@@ -17,6 +17,7 @@ use Inertia\Inertia;
 use Inertia\Response as InertiaResponse;
 
 Route::middleware('auth')->group(function (): void {
+    // หน้าแรก: Admin ไปหน้าแดชบอร์ด, ผู้ใช้ทั่วไปไปหน้าจัดการไฟล์
     Route::get('/', function (Request $request, FileManagerController $controller): InertiaResponse|RedirectResponse {
         if ($request->user()?->role === UserRole::Admin) {
             return redirect()->route('admin.dashboard');
@@ -24,6 +25,8 @@ Route::middleware('auth')->group(function (): void {
 
         return $controller->index($request);
     })->name('dashboard');
+
+    // จัดการไฟล์และโฟลเดอร์ (ดูรายการ, สร้างโฟลเดอร์, อัปโหลด, เปลี่ยนชื่อ, ย้าย, ดาวน์โหลด, พรีวิว, ลบ)
     Route::get('/files', [FileManagerController::class, 'index'])->name('files.index');
     Route::post('/files/folders', [FileManagerController::class, 'createFolder'])->name('files.folders.store');
     Route::post('/files/upload', [FileManagerController::class, 'upload'])->name('files.upload');
@@ -37,28 +40,34 @@ Route::middleware('auth')->group(function (): void {
     Route::get('/files/{node:uuid}/request-access', [AccessRequestController::class, 'prompt'])->name('files.request-access');
     Route::delete('/files/{node:uuid}', [TrashController::class, 'destroy'])->name('files.destroy');
 
+    // ระบบแชร์ไฟล์/โฟลเดอร์
     Route::get('/shares', [ShareController::class, 'index'])->name('shares.index');
     Route::post('/shares', [ShareController::class, 'store'])->name('shares.store');
     Route::patch('/shares/{share}/revoke', [ShareController::class, 'revoke'])->name('shares.revoke');
 
+    // ระบบคำขอสิทธิ์เข้าถึงไฟล์
     Route::get('/access-requests', [AccessRequestController::class, 'index'])->name('access-requests.index');
     Route::post('/access-requests', [AccessRequestController::class, 'store'])->name('access-requests.store');
     Route::patch('/access-requests/{accessRequest}/decide', [AccessRequestController::class, 'decide'])->name('access-requests.decide');
     Route::patch('/access-requests/{accessRequest}/cancel', [AccessRequestController::class, 'cancel'])->name('access-requests.cancel');
 
+    // การแจ้งเตือน (Notifications)
     Route::patch('/notifications/{notification}/read', [ShareController::class, 'markNotificationRead'])->name('notifications.read');
     Route::post('/notifications/read-all', [ShareController::class, 'markAllNotificationsRead'])->name('notifications.read-all');
 
+    // ถังขยะ (Trash)
     Route::get('/trash', [TrashController::class, 'index'])->name('trash.index');
     Route::post('/trash/{uuid}/restore', [TrashController::class, 'restore'])->name('trash.restore');
     Route::delete('/trash/{uuid}', [TrashController::class, 'forceDestroy'])->name('trash.force-destroy');
 
+    // ตั้งค่าโปรไฟล์และรหัสผ่านส่วนตัว
     Route::get('/settings/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::post('/settings/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::get('/users/{user}/avatar', [ProfileController::class, 'showAvatar'])->name('users.avatar');
 
     Route::get('/settings/password', fn (): InertiaResponse => Inertia::render('Settings/Password'))->name('password.edit');
 
+    // ส่วนผู้ดูแลระบบ (Admin เท่านั้น): แดชบอร์ด, Audit Logs, จัดการผู้ใช้และแผนก
     Route::middleware('role:admin')->prefix('admin')->name('admin.')->group(function (): void {
         Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
         Route::get('/audit-logs', [AuditLogController::class, 'index'])->name('audit-logs.index');

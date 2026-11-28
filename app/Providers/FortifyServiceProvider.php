@@ -23,10 +23,16 @@ use Laravel\Fortify\Contracts\RegisterResponse as RegisterResponseContract;
 use Laravel\Fortify\Fortify;
 use Symfony\Component\HttpFoundation\Response;
 
+/**
+ * ตั้งค่าระบบยืนยันตัวตน (Fortify): หน้า Login/Register, Redirect หลังเข้าสู่ระบบ,
+ * กฎล็อกบัญชีเมื่อใส่รหัสผ่านผิด และ Rate Limiter
+ */
 class FortifyServiceProvider extends ServiceProvider
 {
+    /** จำนวนครั้งสูงสุดที่ใส่รหัสผ่านผิดก่อนล็อกบัญชีชั่วคราว */
     public const int MAX_FAILED_ATTEMPTS = 5;
 
+    /** ระยะเวลาล็อกบัญชีชั่วคราว (นาที) */
     public const int LOCKOUT_MINUTES = 15;
 
     /**

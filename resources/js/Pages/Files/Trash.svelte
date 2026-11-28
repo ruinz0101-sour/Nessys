@@ -1,8 +1,12 @@
 <script>
 import { Link, router } from '@inertiajs/svelte';
 import AppLayout from '../../Layouts/AppLayout.svelte';
+import ConfirmDeleteModal from '../../Components/ConfirmDeleteModal.svelte';
 
 let { items = [] } = $props();
+
+let deletingItem = $state(null);
+let isForceDeleting = $state(false);
 
 function restoreItem(item) {
     router.post(`/trash/${item.uuid}/restore`, {}, {
@@ -11,8 +15,20 @@ function restoreItem(item) {
 }
 
 function forceDeleteItem(item) {
-    router.delete(`/trash/${item.uuid}`, {
+    deletingItem = item;
+}
+
+function confirmForceDelete() {
+    if (!deletingItem || isForceDeleting) {
+        return;
+    }
+    isForceDeleting = true;
+    router.delete(`/trash/${deletingItem.uuid}`, {
         preserveScroll: true,
+        onFinish: () => {
+            isForceDeleting = false;
+            deletingItem = null;
+        },
     });
 }
 
@@ -134,4 +150,20 @@ function formatDate(iso) {
             </div>
         {/if}
     </div>
+
+    <!-- Confirm Permanent Delete Modal -->
+    <ConfirmDeleteModal
+        open={Boolean(deletingItem)}
+        title="ยืนยันการลบถาวร"
+        itemName={deletingItem?.name ?? ''}
+        itemType={deletingItem?.type ?? 'file'}
+        description={deletingItem?.type === 'folder'
+            ? 'คำเตือน: โฟลเดอร์นี้และไฟล์ทั้งหมดภายในจะถูกลบออกจากระบบอย่างถาวร และไม่สามารถกู้คืนได้อีก'
+            : 'คำเตือน: ไฟล์นี้จะถูกลบออกจากระบบอย่างถาวร และไม่สามารถกู้คืนได้อีก'}
+        confirmLabel="ยืนยันลบถาวร"
+        isPermanent={true}
+        processing={isForceDeleting}
+        onconfirm={confirmForceDelete}
+        oncancel={() => (deletingItem = null)}
+    />
 </AppLayout>

@@ -379,7 +379,7 @@ class FileManagerController extends Controller
                 $realPath = $file->getRealPath();
                 $sha256 = $realPath !== false ? hash_file('sha256', $realPath) : hash('sha256', $uuid);
 
-                $diskFilename = $extension !== '' ? "{$uuid}.{$extension}" : $uuid;
+                $diskFilename = $this->resolveUniqueDiskFilename($originalName);
                 $storagePath = $file->storeAs('files', $diskFilename, 'local');
 
                 $node = Node::create([
@@ -612,6 +612,7 @@ class FileManagerController extends Controller
         RootType $rootType,
         ?int $departmentId,
     ): JsonResponse {
+        @set_time_limit(0);
         clearstatcache(true, $partPath);
         $actualSize = (int) filesize($partPath);
 
@@ -630,7 +631,7 @@ class FileManagerController extends Controller
             $realMime = $this->detectMimeTypeFromPath($partPath);
             $category = $this->resolveFileCategory($realMime, $extension);
             $sha256 = hash_file('sha256', $partPath) ?: hash('sha256', $uuid);
-            $diskFilename = $extension !== '' ? "{$uuid}.{$extension}" : $uuid;
+            $diskFilename = $this->resolveUniqueDiskFilename($originalName);
             $storagePath = "files/{$diskFilename}";
             $finalPath = Storage::disk('local')->path($storagePath);
 
@@ -751,7 +752,25 @@ class FileManagerController extends Controller
         );
 
         $oldName = $node->name;
-        $node->update(['name' => $newName]);
+        $updateData = ['name' => $newName];
+
+        if ($node->type === NodeType::File && $node->storage_path !== null) {
+            $newDiskFilename = $this->resolveUniqueDiskFilename($newName, $node->storage_path);
+            $newStoragePath = "files/{$newDiskFilename}";
+
+            if ($newStoragePath !== $node->storage_path && Storage::disk('local')->exists($node->storage_path)) {
+                $oldFullPath = Storage::disk('local')->path($node->storage_path);
+                $newFullPath = Storage::disk('local')->path($newStoragePath);
+
+                if (@rename($oldFullPath, $newFullPath)) {
+                    $updateData['storage_path'] = $newStoragePath;
+                    $newExtension = Str::lower(pathinfo($newName, PATHINFO_EXTENSION));
+                    $updateData['extension'] = $newExtension !== '' ? Str::limit($newExtension, 20, '') : null;
+                }
+            }
+        }
+
+        $node->update($updateData);
 
         AuditLog::create([
             'user_id' => $request->user()?->id,
@@ -1063,6 +1082,64 @@ class FileManagerController extends Controller
         return $fallback ?: 'application/octet-stream';
     }
 
+    /**
+     * สร้างชื่อไฟล์บนดิสก์ให้ตรงกับชื่อไฟล์ที่อัปโหลดอย่างปลอดภัย
+     * หากมีไฟล์ชื่อเดียวกันอยู่แล้วในโฟลเดอร์ files/ จะเติม (2), (3), ... ต่อท้ายอัตโนมัติเพื่อป้องกันการเขียนทับ
+     */
+    protected function resolveUniqueDiskFilename(string $originalName, ?string $currentStoragePath = null): string
+    {
+        $sanitized = preg_replace('/[<>:"\/\\\\|?*\x00-\x1F]/u', '_', basename($originalName)) ?? '';
+        $sanitized = trim($sanitized, ". \t\n\r\0\x0B");
+
+        if ($sanitized === '' || $sanitized === '.' || $sanitized === '..') {
+            $sanitized = (string) Str::uuid();
+        }
+
+        $extension = pathinfo($sanitized, PATHINFO_EXTENSION);
+        $baseName = pathinfo($sanitized, PATHINFO_FILENAME);
+
+        if ($baseName === '') {
+            $baseName = (string) Str::uuid();
+        }
+
+        $candidate = $extension !== '' ? "{$baseName}.{$extension}" : $baseName;
+        $counter = 2;
+
+        while (true) {
+            $relativePath = "files/{$candidate}";
+
+            if ($currentStoragePath !== null && $relativePath === $currentStoragePath) {
+                return $candidate;
+            }
+
+            $existsOnDisk = Storage::disk('local')->exists($relativePath);
+            $existsInDb = Node::withTrashed()
+                ->where('storage_path', $relativePath)
+                ->when($currentStoragePath !== null, function ($query) use ($currentStoragePath): void {
+                    $query->where('storage_path', '!=', $currentStoragePath);
+                })
+                ->exists();
+
+            if (! $existsOnDisk && ! $existsInDb) {
+                return $candidate;
+            }
+
+            $candidate = $extension !== ''
+                ? "{$baseName} ({$counter}).{$extension}"
+                : "{$baseName} ({$counter})";
+            $counter++;
+        }
+    }
+
+    /**
+     * แยกหมวดหมู่ไฟล์จาก MIME type จริงและนามสกุลไฟล์
+     * - รูปภาพ (image): MIME ขึ้นต้นด้วย image/
+     * - วิดีโอ (video): MIME ขึ้นต้นด้วย video/
+     * - เอกสาร (document): MIME text/*, PDF/Office/RTF หรือนามสกุลใน $documentExtensions
+     * - อื่นๆ (other): ไฟล์ทุกชนิดที่ไม่เข้าเงื่อนไขด้านบน (เช่น zip, mp3, exe, psd)
+     *
+     * หากต้องการเพิ่ม/เปลี่ยนเงื่อนไขหมวดหมู่ไฟล์ ให้แก้ไขที่เมธอดนี้
+     */
     protected function resolveFileCategory(string $mimeType, string $extension): FileCategory
     {
         if (str_starts_with($mimeType, 'image/')) {

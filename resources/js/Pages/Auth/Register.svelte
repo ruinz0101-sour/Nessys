@@ -1,3 +1,8 @@
+<!--
+    หน้าสมัครสมาชิก (/register)
+    - ตรรกะสร้างผู้ใช้และค่าเริ่มต้น (role, department_id = null, quota 10GB) อยู่ที่: app/Actions/Fortify/CreateNewUser.php
+    - การส่ง props เข้าหน้านี้และการ Redirect หลังสมัคร อยู่ที่: app/Providers/FortifyServiceProvider.php
+-->
 <script>
 import { Link, useForm } from '@inertiajs/svelte';
 

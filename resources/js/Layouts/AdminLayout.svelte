@@ -1,11 +1,41 @@
 <script>
 import { Link, router, usePage } from '@inertiajs/svelte';
+import UploadProgressModal from '../Components/UploadProgressModal.svelte';
+import {
+    uploadState,
+    pauseUpload,
+    resumeUpload,
+    toggleMinimizeUpload,
+    cancelUpload,
+    retryUpload,
+    refreshPage,
+    closeUploadModal,
+} from '../stores/uploadManager.svelte.js';
 
 let { title = 'แผงควบคุมผู้ดูแลระบบ', children } = $props();
 
 const page = usePage();
 let user = $derived(page.props.auth?.user);
 let flash = $derived(page.props.flash ?? {});
+let visibleFlash = $state({ success: null, error: null, status: null });
+
+$effect(() => {
+    const success = flash.success ?? null;
+    const error = flash.error ?? null;
+    const status = flash.status ?? null;
+
+    visibleFlash = { success, error, status };
+
+    if (!success && !error && !status) {
+        return;
+    }
+
+    const timer = setTimeout(() => {
+        visibleFlash = { success: null, error: null, status: null };
+    }, 3000);
+
+    return () => clearTimeout(timer);
+});
 let notifications = $derived(page.props.notifications ?? { unread_count: 0, items: [] });
 let currentUrl = $derived(page.url ?? '/');
 
@@ -117,19 +147,6 @@ function markOneRead(n) {
                     </svg>
                 </span>
                 <span>ประวัติความปลอดภัย</span>
-            </Link>
-
-            <Link
-                href="/settings/profile"
-                class="px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all duration-200 {currentUrl.startsWith('/settings/profile') ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-semibold shadow-md shadow-indigo-600/30' : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'}"
-            >
-                <span class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 {currentUrl.startsWith('/settings/profile') ? 'bg-white/15 text-white' : 'bg-slate-800/80 text-indigo-400'}">
-                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-                        <circle cx="12" cy="7" r="4" />
-                    </svg>
-                </span>
-                <span>แก้ไขโปรไฟล์</span>
             </Link>
 
             <div class="px-3 pt-4 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
@@ -287,39 +304,66 @@ function markOneRead(n) {
 
         <!-- Flash Banners & Content -->
         <main class="p-6 flex-1 max-w-7xl w-full mx-auto animate-fade-up">
-            {#if flash.success}
+            {#if visibleFlash.success}
                 <div class="mb-5 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center gap-2.5 shadow-2xs">
                     <svg class="w-4 h-4 shrink-0 text-emerald-600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                         <polyline points="22 4 12 14.01 9 11.01" />
                     </svg>
-                    <span>{flash.success}</span>
+                    <span>{visibleFlash.success}</span>
                 </div>
             {/if}
 
-            {#if flash.error}
+            {#if visibleFlash.error}
                 <div class="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center gap-2.5 shadow-2xs">
                     <svg class="w-4 h-4 shrink-0 text-rose-600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="10" />
                         <line x1="12" y1="8" x2="12" y2="12" />
                         <line x1="12" y1="16" x2="12.01" y2="16" />
                     </svg>
-                    <span>{flash.error}</span>
+                    <span>{visibleFlash.error}</span>
                 </div>
             {/if}
 
-            {#if flash.status}
+            {#if visibleFlash.status}
                 <div class="mb-5 p-3.5 rounded-xl bg-sky-50 border border-sky-200 text-sky-800 text-xs font-medium flex items-center gap-2.5 shadow-2xs">
                     <svg class="w-4 h-4 shrink-0 text-sky-600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="10" />
                         <line x1="12" y1="16" x2="12" y2="12" />
                         <line x1="12" y1="8" x2="12.01" y2="8" />
                     </svg>
-                    <span>{flash.status}</span>
+                    <span>{visibleFlash.status}</span>
                 </div>
             {/if}
 
             {@render children()}
         </main>
     </div>
+
+    <!-- Global Floating Upload Progress Panel (ทำงานต่อได้แม้เปลี่ยนหน้า) -->
+    <UploadProgressModal
+        open={uploadState.open}
+        minimized={uploadState.minimized}
+        status={uploadState.status}
+        percentage={uploadState.percentage}
+        loadedBytes={uploadState.loadedBytes}
+        totalBytes={uploadState.totalBytes}
+        speedBytesPerSec={uploadState.speedBytesPerSec}
+        elapsedSeconds={uploadState.elapsedSeconds}
+        remainingSeconds={uploadState.remainingSeconds}
+        estimatedFinishAt={uploadState.estimatedFinishAt}
+        finishedClockAt={uploadState.finishedClockAt}
+        files={uploadState.files}
+        destination={uploadState.destination}
+        errorMessage={uploadState.errorMessage}
+        quotaInfo={uploadState.quotaInfo}
+        canRetry={uploadState.canRetry}
+        onpause={pauseUpload}
+        onresume={resumeUpload}
+        onminimize={toggleMinimizeUpload}
+        oncancel={cancelUpload}
+        onretry={retryUpload}
+        onrefresh={refreshPage}
+        onclose={closeUploadModal}
+    />
 </div>

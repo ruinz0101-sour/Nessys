@@ -2,7 +2,12 @@
 import { Link, router, useForm, usePage } from '@inertiajs/svelte';
 import AppLayout from '../../Layouts/AppLayout.svelte';
 import FilePreviewModal from '../../Components/FilePreviewModal.svelte';
-import UploadProgressModal from '../../Components/UploadProgressModal.svelte';
+import ConfirmDeleteModal from '../../Components/ConfirmDeleteModal.svelte';
+import {
+    uploadState,
+    startUpload as startGlobalUpload,
+    showQuotaExceededModal as showGlobalQuotaExceededModal,
+} from '../../stores/uploadManager.svelte.js';
 
 let {
     currentRoot = 'personal',
@@ -169,61 +174,7 @@ let usedBytes = $derived(Number(authUser?.used_bytes ?? 0));
 let remainingBytes = $derived(quotaBytes > 0 ? Math.max(0, quotaBytes - usedBytes) : null);
 let isQuotaFull = $derived(quotaBytes > 0 && usedBytes >= quotaBytes);
 
-let uploadModal = $state({
-    open: false,
-    status: 'uploading', // 'uploading' | 'success' | 'error' | 'quota_exceeded'
-    percentage: 0,
-    loadedBytes: 0,
-    totalBytes: 0,
-    speedBytesPerSec: 0,
-    files: [],
-    destination: '',
-    errorMessage: '',
-    quotaInfo: null,
-});
-let uploadCloseTimer = null;
-
-function closeUploadModal() {
-    if (uploadCloseTimer) {
-        clearTimeout(uploadCloseTimer);
-        uploadCloseTimer = null;
-    }
-    uploadModal.open = false;
-}
-
-function showQuotaExceededModal(selected = [], destination = '', customMessage = '') {
-    if (uploadCloseTimer) {
-        clearTimeout(uploadCloseTimer);
-        uploadCloseTimer = null;
-    }
-
-    const neededBytes = selected.reduce((sum, file) => sum + (file.size || 0), 0);
-    const remaining = quotaBytes > 0 ? Math.max(0, quotaBytes - usedBytes) : 0;
-    const defaultMessage = remaining <= 0
-        ? 'พื้นที่จัดเก็บของคุณเต็มแล้ว ไม่เพียงพอสำหรับการอัปโหลดไฟล์'
-        : 'พื้นที่จัดเก็บไม่เพียงพอ ไฟล์ที่เลือกมีขนาดเกินพื้นที่คงเหลือของคุณ';
-
-    uploadModal = {
-        open: true,
-        status: 'quota_exceeded',
-        percentage: 0,
-        loadedBytes: 0,
-        totalBytes: neededBytes,
-        files: selected.map((file) => ({
-            name: file.name,
-            size: file.size || 0,
-            type: file.type || '',
-        })),
-        destination,
-        errorMessage: customMessage || defaultMessage,
-        quotaInfo: {
-            usedBytes,
-            quotaBytes,
-            remainingBytes: remaining,
-            neededBytes,
-        },
-    };
-}
+let isUploading = $derived(uploadState.isUploading);
 
 function triggerCurrentUpload() {
     const destination = currentFolder
@@ -231,7 +182,7 @@ function triggerCurrentUpload() {
         : rootLabel(currentRoot);
 
     if (isQuotaFull) {
-        showQuotaExceededModal([], destination);
+        showGlobalQuotaExceededModal([], destination, { usedBytes, quotaBytes });
         return;
     }
     uploadInputRef?.click();
@@ -242,383 +193,10 @@ function triggerDropzoneUpload() {
         return;
     }
     if (isQuotaFull) {
-        showQuotaExceededModal([], `พื้นที่ส่วนกลาง / ${dropzoneFolder.name}`);
+        showGlobalQuotaExceededModal([], `พื้นที่ส่วนกลาง / ${dropzoneFolder.name}`, { usedBytes, quotaBytes });
         return;
     }
     dropzoneUploadInputRef?.click();
-}
-
-const CHUNK_SIZE_BYTES = 16 * 1024 * 1024; // 16 MB per chunk (fits under 40M php.ini limit)
-const PARALLEL_CHUNKS = 3;
-let isUploading = $state(false);
-let activeUploadXhrs = new Set();
-let activeUploadId = null;
-let uploadCancelled = false;
-let lastUploadAttempt = $state(null);
-
-function getXsrfToken() {
-    const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : '';
-}
-
-function generateUploadId() {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-        return crypto.randomUUID();
-    }
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0;
-        const v = c === 'x' ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-    });
-}
-
-function sendChunkRequest(formData, onChunkProgress) {
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        activeUploadXhrs.add(xhr);
-
-        xhr.open('POST', '/files/upload/chunk', true);
-        xhr.setRequestHeader('Accept', 'application/json');
-        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-        const xsrf = getXsrfToken();
-        if (xsrf) {
-            xhr.setRequestHeader('X-XSRF-TOKEN', xsrf);
-        }
-
-        xhr.upload.onprogress = (event) => {
-            if (event.lengthComputable && onChunkProgress) {
-                onChunkProgress(event.loaded, event.total);
-            }
-        };
-
-        xhr.onload = () => {
-            activeUploadXhrs.delete(xhr);
-            let body = null;
-            try {
-                body = xhr.responseText ? JSON.parse(xhr.responseText) : null;
-            } catch {
-                body = null;
-            }
-
-            if (xhr.status >= 200 && xhr.status < 300) {
-                resolve(body);
-                return;
-            }
-
-            const validationMsg = body?.errors
-                ? Object.values(body.errors).flat().find((m) => typeof m === 'string' && m.length > 0)
-                : null;
-            const message = validationMsg
-                || body?.message
-                || `เกิดข้อผิดพลาดระหว่างอัปโหลด (HTTP ${xhr.status})`;
-            const err = new Error(message);
-            err.status = xhr.status;
-            reject(err);
-        };
-
-        xhr.onerror = () => {
-            activeUploadXhrs.delete(xhr);
-            reject(new Error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่อีกครั้ง'));
-        };
-
-        xhr.onabort = () => {
-            activeUploadXhrs.delete(xhr);
-            const err = new Error('cancelled');
-            err.cancelled = true;
-            reject(err);
-        };
-
-        xhr.send(formData);
-    });
-}
-
-async function completeChunkUploadRequest({ uploadId, fileName, rootType, parentId }) {
-    const xsrf = getXsrfToken();
-    const response = await fetch('/files/upload/chunk/complete', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            'X-Requested-With': 'XMLHttpRequest',
-            ...(xsrf ? { 'X-XSRF-TOKEN': xsrf } : {}),
-        },
-        body: JSON.stringify({
-            upload_id: uploadId,
-            file_name: fileName,
-            root_type: rootType,
-            parent_id: parentId ?? null,
-        }),
-    });
-
-    let body = null;
-    try {
-        body = await response.json();
-    } catch {
-        body = null;
-    }
-
-    if (!response.ok) {
-        const validationMsg = body?.errors
-            ? Object.values(body.errors).flat().find((m) => typeof m === 'string' && m.length > 0)
-            : null;
-        throw new Error(validationMsg || body?.message || `เกิดข้อผิดพลาดระหว่างบันทึกไฟล์ (HTTP ${response.status})`);
-    }
-
-    return body;
-}
-
-function cancelUpload() {
-    uploadCancelled = true;
-    const cancellingId = activeUploadId;
-    for (const xhr of activeUploadXhrs) {
-        xhr.abort();
-    }
-    activeUploadXhrs.clear();
-    if (cancellingId) {
-        const xsrf = getXsrfToken();
-        fetch(`/files/upload/chunk/${cancellingId}`, {
-            method: 'DELETE',
-            headers: {
-                Accept: 'application/json',
-                'X-Requested-With': 'XMLHttpRequest',
-                ...(xsrf ? { 'X-XSRF-TOKEN': xsrf } : {}),
-            },
-        }).catch(() => {});
-    }
-    isUploading = false;
-    activeUploadId = null;
-    closeUploadModal();
-}
-
-function retryUpload() {
-    if (!lastUploadAttempt || isUploading) {
-        return;
-    }
-    startUpload(lastUploadAttempt.selected, lastUploadAttempt.options);
-}
-
-function refreshPage() {
-    window.location.reload();
-}
-
-async function startUpload(selected, { rootType, parentId, destination, onSuccessExtra = null, resetInput = null }) {
-    if (uploadCloseTimer) {
-        clearTimeout(uploadCloseTimer);
-        uploadCloseTimer = null;
-    }
-
-    lastUploadAttempt = {
-        selected,
-        options: { rootType, parentId, destination, onSuccessExtra, resetInput },
-    };
-
-    const totalSize = selected.reduce((sum, file) => sum + (file.size || 0), 0);
-
-    if (quotaBytes > 0 && (usedBytes + totalSize) > quotaBytes) {
-        if (resetInput) {
-            resetInput();
-        }
-        showQuotaExceededModal(selected, destination);
-        return;
-    }
-
-    uploadCancelled = false;
-    isUploading = true;
-    const startedAt = performance.now();
-
-    uploadModal = {
-        open: true,
-        status: 'uploading',
-        percentage: 0,
-        loadedBytes: 0,
-        totalBytes: totalSize,
-        speedBytesPerSec: 0,
-        files: selected.map((file) => ({
-            name: file.name,
-            size: file.size || 0,
-            type: file.type || '',
-        })),
-        destination,
-        errorMessage: '',
-        quotaInfo: null,
-    };
-
-    uploadForm.clearErrors();
-
-    let completedFilesBytes = 0;
-    let uploadedCount = 0;
-
-    try {
-        for (const file of selected) {
-            if (uploadCancelled) {
-                break;
-            }
-
-            const uploadId = generateUploadId();
-            activeUploadId = uploadId;
-            const totalChunks = Math.max(1, Math.ceil((file.size || 0) / CHUNK_SIZE_BYTES));
-            const isMultiChunk = totalChunks > 1;
-            const chunkLoadedMap = new Map();
-
-            const updateProgress = () => {
-                if (uploadCancelled) {
-                    return;
-                }
-                let inFlightBytes = 0;
-                for (const bytes of chunkLoadedMap.values()) {
-                    inFlightBytes += bytes;
-                }
-                const currentLoaded = Math.min(totalSize, completedFilesBytes + inFlightBytes);
-                uploadModal.loadedBytes = currentLoaded;
-                uploadModal.percentage = totalSize > 0
-                    ? Math.min(100, Math.round((currentLoaded / totalSize) * 100))
-                    : 100;
-
-                const elapsedSec = (performance.now() - startedAt) / 1000;
-                if (elapsedSec > 0.25 && currentLoaded > 0) {
-                    uploadModal.speedBytesPerSec = Math.round(currentLoaded / elapsedSec);
-                }
-            };
-
-            const uploadSingleChunk = async (chunkIndex) => {
-                if (uploadCancelled) {
-                    return;
-                }
-
-                const start = chunkIndex * CHUNK_SIZE_BYTES;
-                const end = Math.min(file.size, start + CHUNK_SIZE_BYTES);
-                const blob = file.slice(start, end);
-                const chunkSize = end - start;
-
-                const formData = new FormData();
-                formData.append('upload_id', uploadId);
-                formData.append('chunk', blob, file.name);
-                formData.append('chunk_index', String(chunkIndex));
-                formData.append('total_chunks', String(totalChunks));
-                formData.append('chunk_offset', String(start));
-                if (isMultiChunk) {
-                    formData.append('defer_finalize', '1');
-                }
-                formData.append('file_name', file.name);
-                formData.append('file_size', String(file.size || 0));
-                formData.append('root_type', rootType);
-                if (parentId !== null && parentId !== undefined) {
-                    formData.append('parent_id', String(parentId));
-                }
-
-                await sendChunkRequest(formData, (loaded, total) => {
-                    const chunkProgressBytes = total > 0
-                        ? Math.min(chunkSize, Math.round((loaded / total) * chunkSize))
-                        : 0;
-                    chunkLoadedMap.set(chunkIndex, chunkProgressBytes);
-                    updateProgress();
-                });
-
-                chunkLoadedMap.set(chunkIndex, chunkSize);
-                updateProgress();
-            };
-
-            // ส่งชิ้นแรกก่อนเพื่อเช็กสิทธิ์ ชื่อซ้ำ และโควต้าทันที
-            await uploadSingleChunk(0);
-
-            if (isMultiChunk && !uploadCancelled) {
-                let nextIndex = 1;
-                const workerCount = Math.min(PARALLEL_CHUNKS, totalChunks - 1);
-                const workers = Array.from({ length: workerCount }, async () => {
-                    while (!uploadCancelled) {
-                        const idx = nextIndex;
-                        nextIndex += 1;
-                        if (idx >= totalChunks) {
-                            break;
-                        }
-                        await uploadSingleChunk(idx);
-                    }
-                });
-
-                await Promise.all(workers);
-
-                if (!uploadCancelled) {
-                    await completeChunkUploadRequest({
-                        uploadId,
-                        fileName: file.name,
-                        rootType,
-                        parentId,
-                    });
-                }
-            }
-
-            if (!uploadCancelled) {
-                completedFilesBytes += file.size || 0;
-                uploadedCount += 1;
-            }
-            activeUploadId = null;
-        }
-
-        if (uploadCancelled) {
-            if (uploadedCount > 0) {
-                router.reload({ preserveScroll: true });
-            }
-            return;
-        }
-
-        uploadModal.status = 'success';
-        uploadModal.percentage = 100;
-        uploadModal.loadedBytes = uploadModal.totalBytes;
-
-        if (onSuccessExtra) {
-            onSuccessExtra();
-        } else {
-            router.reload({ preserveScroll: true });
-        }
-
-        uploadCloseTimer = setTimeout(() => {
-            uploadModal.open = false;
-            uploadCloseTimer = null;
-        }, 1000);
-    } catch (err) {
-        if (err?.cancelled || uploadCancelled) {
-            if (uploadedCount > 0) {
-                router.reload({ preserveScroll: true });
-            }
-            return;
-        }
-
-        // ยกเลิก XHR อื่นที่ยังวิ่งอยู่และลบไฟล์ชั่วคราว
-        for (const xhr of activeUploadXhrs) {
-            xhr.abort();
-        }
-        activeUploadXhrs.clear();
-        if (activeUploadId) {
-            const xsrf = getXsrfToken();
-            fetch(`/files/upload/chunk/${activeUploadId}`, {
-                method: 'DELETE',
-                headers: {
-                    Accept: 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    ...(xsrf ? { 'X-XSRF-TOKEN': xsrf } : {}),
-                },
-            }).catch(() => {});
-        }
-
-        const message = err?.message || 'เกิดข้อผิดพลาดระหว่างอัปโหลด กรุณาตรวจสอบขนาดไฟล์หรือการเชื่อมต่อแล้วลองใหม่อีกครั้ง';
-        if (message.includes('พื้นที่จัดเก็บ') || message.includes('ไม่เพียงพอ')) {
-            showQuotaExceededModal(selected, destination, message);
-        } else {
-            uploadModal.status = 'error';
-            uploadModal.errorMessage = message;
-        }
-
-        if (uploadedCount > 0) {
-            router.reload({ preserveScroll: true });
-        }
-    } finally {
-        isUploading = false;
-        activeUploadId = null;
-        activeUploadXhrs.clear();
-        if (resetInput) {
-            resetInput();
-        }
-    }
 }
 
 function handleFileSelect(e) {
@@ -630,10 +208,13 @@ function handleFileSelect(e) {
         ? `${rootLabel(currentRoot)} / ${currentFolder.name}`
         : rootLabel(currentRoot);
 
-    startUpload(selected, {
+    uploadForm.clearErrors();
+    startGlobalUpload(selected, {
         rootType: currentRoot,
         parentId: currentFolder?.id ?? null,
         destination,
+        quotaBytes,
+        usedBytes,
         resetInput: () => {
             if (uploadInputRef) {
                 uploadInputRef.value = '';
@@ -648,10 +229,13 @@ function handleDropzoneDirectUpload(e) {
         return;
     }
 
-    startUpload(selected, {
+    uploadForm.clearErrors();
+    startGlobalUpload(selected, {
         rootType: 'shared',
         parentId: dropzoneFolder.id,
         destination: `พื้นที่ส่วนกลาง / ${dropzoneFolder.name}`,
+        quotaBytes,
+        usedBytes,
         onSuccessExtra: () => {
             if (currentFolder?.id !== dropzoneFolder.id) {
                 router.visit(`/files?root=shared&folder=${dropzoneFolder.uuid}`);
@@ -707,9 +291,24 @@ function submitMove(e) {
     });
 }
 
+let deletingNode = $state(null);
+let isDeletingNode = $state(false);
+
 function moveToTrash(node) {
-    router.delete(`/files/${node.uuid}`, {
+    deletingNode = node;
+}
+
+function confirmMoveToTrash() {
+    if (!deletingNode || isDeletingNode) {
+        return;
+    }
+    isDeletingNode = true;
+    router.delete(`/files/${deletingNode.uuid}`, {
         preserveScroll: true,
+        onFinish: () => {
+            isDeletingNode = false;
+            deletingNode = null;
+        },
     });
 }
 
@@ -1092,6 +691,7 @@ function categoryBadge(cat) {
                             placeholder="ค้นหาชื่อไฟล์หรือโฟลเดอร์..."
                             class="input-trust w-60 py-1.5 text-xs"
                         />
+                        <!-- ตัวกรองหมวดหมู่ไฟล์: เกณฑ์การแยกหมวดหมู่อยู่ที่ app/Http/Controllers/FileManagerController.php (resolveFileCategory) และ app/Enums/FileCategory.php -->
                         <select
                             bind:value={categoryInput}
                             onchange={applySearch}
@@ -1609,25 +1209,21 @@ function categoryBadge(cat) {
         </div>
     {/if}
 
-    <!-- Upload Progress Modal -->
-    <UploadProgressModal
-        open={uploadModal.open}
-        status={uploadModal.status}
-        percentage={uploadModal.percentage}
-        loadedBytes={uploadModal.loadedBytes}
-        totalBytes={uploadModal.totalBytes}
-        speedBytesPerSec={uploadModal.speedBytesPerSec}
-        files={uploadModal.files}
-        destination={uploadModal.destination}
-        errorMessage={uploadModal.errorMessage}
-        quotaInfo={uploadModal.quotaInfo}
-        canRetry={Boolean(lastUploadAttempt && lastUploadAttempt.selected?.length > 0)}
-        oncancel={cancelUpload}
-        onretry={retryUpload}
-        onrefresh={refreshPage}
-        onclose={closeUploadModal}
-    />
-
     <!-- File Preview Modal -->
     <FilePreviewModal file={previewingFile} onclose={() => (previewingFile = null)} />
+
+    <!-- Confirm Delete Modal -->
+    <ConfirmDeleteModal
+        open={Boolean(deletingNode)}
+        title={deletingNode?.type === 'folder' ? 'ยืนยันการลบโฟลเดอร์' : 'ยืนยันการลบไฟล์'}
+        itemName={deletingNode?.name ?? ''}
+        itemType={deletingNode?.type ?? 'file'}
+        description={deletingNode?.type === 'folder'
+            ? 'โฟลเดอร์นี้และไฟล์ทั้งหมดภายในจะถูกย้ายไปยังถังขยะ สามารถกู้คืนได้ภายใน 30 วันก่อนถูกลบถาวร'
+            : 'ไฟล์นี้จะถูกย้ายไปยังถังขยะ สามารถกู้คืนได้ภายใน 30 วันก่อนถูกลบถาวร'}
+        confirmLabel="ยืนยันย้ายลงถังขยะ"
+        processing={isDeletingNode}
+        onconfirm={confirmMoveToTrash}
+        oncancel={() => (deletingNode = null)}
+    />
 </AppLayout>

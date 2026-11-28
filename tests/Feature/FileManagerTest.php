@@ -100,7 +100,7 @@ class FileManagerTest extends TestCase
         $this->assertEquals(FileCategory::Image, $photoNode->category);
         $this->assertNotNull($reportNode->sha256);
         $this->assertEquals(64, strlen($reportNode->sha256));
-        $this->assertStringContainsString($reportNode->uuid, (string) $reportNode->storage_path);
+        $this->assertSame('files/report.pdf', $reportNode->storage_path);
         Storage::disk('local')->assertExists($reportNode->storage_path);
 
         $user->refresh();
