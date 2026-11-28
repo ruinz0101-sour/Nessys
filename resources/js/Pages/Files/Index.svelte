@@ -52,7 +52,13 @@ let showFolderModal = $state(false);
 let renamingNode = $state(null);
 let movingNode = $state(null);
 let sharingNode = $state(null);
-let shareTargetType = $state('user'); // 'user' | 'department'
+let shareTargetType = $state('user'); // 'user' | 'department' | 'link'
+let shareLinkPassword = $state('');
+let shareLinkMaxDownloads = $state('');
+let shareLinkCreating = $state(false);
+let shareLinkError = $state('');
+let generatedShareLink = $state(null);
+let copiedShareUrl = $state(false);
 let uploadInputRef = $state(null);
 let dropzoneUploadInputRef = $state(null);
 
@@ -312,6 +318,11 @@ function confirmMoveToTrash() {
     });
 }
 
+function getXsrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+}
+
 function openShareModal(node) {
     sharingNode = node;
     shareTargetType = 'user';
@@ -321,11 +332,88 @@ function openShareModal(node) {
     shareForm.permission = 'view';
     shareForm.expires_at = '';
     shareForm.clearErrors();
+    shareLinkPassword = '';
+    shareLinkMaxDownloads = '';
+    shareLinkCreating = false;
+    shareLinkError = '';
+    generatedShareLink = null;
+    copiedShareUrl = false;
+}
+
+async function copyShareUrl(url) {
+    if (!url) {
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(url);
+        copiedShareUrl = true;
+        setTimeout(() => {
+            copiedShareUrl = false;
+        }, 2000);
+    } catch {
+        const input = document.createElement('input');
+        input.value = url;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+        copiedShareUrl = true;
+        setTimeout(() => {
+            copiedShareUrl = false;
+        }, 2000);
+    }
+}
+
+async function createShareLink() {
+    if (!sharingNode || shareLinkCreating) {
+        return;
+    }
+    shareLinkCreating = true;
+    shareLinkError = '';
+    generatedShareLink = null;
+
+    try {
+        const xsrf = getXsrfToken();
+        const response = await fetch('/share-links', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                ...(xsrf ? { 'X-XSRF-TOKEN': xsrf } : {}),
+            },
+            body: JSON.stringify({
+                node_id: sharingNode.id,
+                expires_at: shareForm.expires_at || null,
+                password: shareLinkPassword || null,
+                max_downloads: shareLinkMaxDownloads ? Number(shareLinkMaxDownloads) : null,
+            }),
+        });
+
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+            const firstErr = body?.errors
+                ? Object.values(body.errors).flat().find((m) => typeof m === 'string' && m.length > 0)
+                : null;
+            shareLinkError = firstErr || body?.message || 'ไม่สามารถสร้างลิงก์แชร์ได้';
+            return;
+        }
+
+        generatedShareLink = body?.share_link ?? null;
+    } catch {
+        shareLinkError = 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาลองใหม่อีกครั้ง';
+    } finally {
+        shareLinkCreating = false;
+    }
 }
 
 function submitShareNode(e) {
     e.preventDefault();
     if (!sharingNode) {
+        return;
+    }
+    if (shareTargetType === 'link') {
+        createShareLink();
         return;
     }
     shareForm.transform((data) => ({
@@ -1115,8 +1203,8 @@ function categoryBadge(cat) {
                 <h3 class="text-sm font-bold text-[#131921] mb-1">แชร์ไฟล์ / โฟลเดอร์</h3>
                 <p class="text-xs text-[#666666] mb-3 truncate">{sharingNode.name}</p>
                 <form onsubmit={submitShareNode} class="flex flex-col gap-3.5">
-                    <!-- Switch User vs Dept Share -->
-                    <div class="inline-flex rounded-[3px] border border-[#DDDDDD] p-0.5 bg-[#F7F9FA] w-fit">
+                    <!-- Switch User vs Dept vs URL Link Share -->
+                    <div class="inline-flex flex-wrap rounded-[3px] border border-[#DDDDDD] p-0.5 bg-[#F7F9FA] w-fit gap-0.5">
                         <button
                             type="button"
                             onclick={() => (shareTargetType = 'user')}
@@ -1130,6 +1218,13 @@ function categoryBadge(cat) {
                             class="px-3 py-1 rounded-[2px] text-xs font-bold transition cursor-pointer {shareTargetType === 'department' ? 'bg-[#232F3E] text-white shadow-xs' : 'text-[#555555] hover:text-[#131921]'}"
                         >
                             แชร์ให้ทั้งแผนก
+                        </button>
+                        <button
+                            type="button"
+                            onclick={() => (shareTargetType = 'link')}
+                            class="px-3 py-1 rounded-[2px] text-xs font-bold transition cursor-pointer {shareTargetType === 'link' ? 'bg-[#232F3E] text-white shadow-xs' : 'text-[#555555] hover:text-[#131921]'}"
+                        >
+                            แชร์เป็นลิงก์ (URL)
                         </button>
                     </div>
 
@@ -1151,7 +1246,32 @@ function categoryBadge(cat) {
                                 <p class="mt-1 text-xs text-[#E53E3E]">{shareForm.errors.shared_with_user_id}</p>
                             {/if}
                         </div>
-                    {:else}
+
+                        <div>
+                            <label for="file_share_perm" class="block text-[11px] font-bold text-[#232F3E] mb-1">สิทธิ์การเข้าถึง</label>
+                            <select
+                                id="file_share_perm"
+                                bind:value={shareForm.permission}
+                                class="input-trust text-xs"
+                            >
+                                <option value="view">ดูอย่างเดียว</option>
+                                <option value="edit">ดูและแก้ไข</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="file_share_exp" class="block text-[11px] font-bold text-[#232F3E] mb-1">วันหมดอายุ (ไม่บังคับ)</label>
+                            <input
+                                id="file_share_exp"
+                                type="datetime-local"
+                                bind:value={shareForm.expires_at}
+                                class="input-trust text-xs"
+                            />
+                            {#if shareForm.errors.expires_at}
+                                <p class="mt-1 text-xs text-[#E53E3E]">{shareForm.errors.expires_at}</p>
+                            {/if}
+                        </div>
+                    {:else if shareTargetType === 'department'}
                         <div>
                             <label for="file_share_dept" class="block text-[11px] font-bold text-[#232F3E] mb-1">เลือกแผนกที่ต้องการแชร์ให้</label>
                             <select
@@ -1169,40 +1289,125 @@ function categoryBadge(cat) {
                                 <p class="mt-1 text-xs text-[#E53E3E]">{shareForm.errors.shared_with_department_id}</p>
                             {/if}
                         </div>
-                    {/if}
 
-                    <div>
-                        <label for="file_share_perm" class="block text-[11px] font-bold text-[#232F3E] mb-1">สิทธิ์การเข้าถึง</label>
-                        <select
-                            id="file_share_perm"
-                            bind:value={shareForm.permission}
-                            class="input-trust text-xs"
-                        >
-                            <option value="view">ดูอย่างเดียว</option>
-                            <option value="edit">ดูและแก้ไข</option>
-                        </select>
-                    </div>
+                        <div>
+                            <label for="file_share_perm_dept" class="block text-[11px] font-bold text-[#232F3E] mb-1">สิทธิ์การเข้าถึง</label>
+                            <select
+                                id="file_share_perm_dept"
+                                bind:value={shareForm.permission}
+                                class="input-trust text-xs"
+                            >
+                                <option value="view">ดูอย่างเดียว</option>
+                                <option value="edit">ดูและแก้ไข</option>
+                            </select>
+                        </div>
 
-                    <div>
-                        <label for="file_share_exp" class="block text-[11px] font-bold text-[#232F3E] mb-1">วันหมดอายุ (ไม่บังคับ)</label>
-                        <input
-                            id="file_share_exp"
-                            type="datetime-local"
-                            bind:value={shareForm.expires_at}
-                            class="input-trust text-xs"
-                        />
-                        {#if shareForm.errors.expires_at}
-                            <p class="mt-1 text-xs text-[#E53E3E]">{shareForm.errors.expires_at}</p>
+                        <div>
+                            <label for="file_share_exp_dept" class="block text-[11px] font-bold text-[#232F3E] mb-1">วันหมดอายุ (ไม่บังคับ)</label>
+                            <input
+                                id="file_share_exp_dept"
+                                type="datetime-local"
+                                bind:value={shareForm.expires_at}
+                                class="input-trust text-xs"
+                            />
+                            {#if shareForm.errors.expires_at}
+                                <p class="mt-1 text-xs text-[#E53E3E]">{shareForm.errors.expires_at}</p>
+                            {/if}
+                        </div>
+                    {:else}
+                        <!-- URL Share Link Tab -->
+                        {#if generatedShareLink}
+                            <div class="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 flex flex-col gap-2.5">
+                                <div class="text-xs font-bold text-emerald-800">สร้างลิงก์แชร์สำเร็จแล้ว!</div>
+                                <div class="flex items-center gap-2">
+                                    <input
+                                        type="text"
+                                        readonly
+                                        value={generatedShareLink.url}
+                                        class="input-trust text-xs font-mono bg-white flex-1"
+                                        onclick={(e) => e.currentTarget.select()}
+                                    />
+                                    <button
+                                        type="button"
+                                        onclick={() => copyShareUrl(generatedShareLink.url)}
+                                        class="px-3 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition cursor-pointer shrink-0"
+                                    >
+                                        {copiedShareUrl ? 'คัดลอกแล้ว!' : 'คัดลอกลิงก์'}
+                                    </button>
+                                </div>
+                                <div class="flex items-center justify-between text-[11px] text-emerald-700">
+                                    <span>ผู้ที่มีลิงก์นี้สามารถเปิดดูและดาวน์โหลดได้</span>
+                                    <a
+                                        href={generatedShareLink.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="font-semibold underline hover:text-emerald-900"
+                                    >
+                                        เปิดลิงก์ &rarr;
+                                    </a>
+                                </div>
+                            </div>
+                        {:else}
+                            <p class="text-[11px] text-slate-500">
+                                สร้าง URL สำหรับส่งให้ผู้อื่นเปิดดูหรือดาวน์โหลดได้โดยไม่ต้องเข้าสู่ระบบ (จัดการและยกเลิกลิงก์ได้ที่เมนู "การแชร์ไฟล์")
+                            </p>
+
+                            <div>
+                                <label for="file_share_link_exp" class="block text-[11px] font-bold text-[#232F3E] mb-1">วันหมดอายุ (ค่าเริ่มต้น 7 วัน หากไม่ระบุ)</label>
+                                <input
+                                    id="file_share_link_exp"
+                                    type="datetime-local"
+                                    bind:value={shareForm.expires_at}
+                                    class="input-trust text-xs"
+                                />
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label for="file_share_link_pass" class="block text-[11px] font-bold text-[#232F3E] mb-1">รหัสผ่านป้องกัน (ไม่บังคับ)</label>
+                                    <input
+                                        id="file_share_link_pass"
+                                        type="password"
+                                        bind:value={shareLinkPassword}
+                                        placeholder="อย่างน้อย 4 ตัวอักษร"
+                                        class="input-trust text-xs"
+                                    />
+                                </div>
+                                <div>
+                                    <label for="file_share_link_max" class="block text-[11px] font-bold text-[#232F3E] mb-1">จำกัดจำนวนดาวน์โหลด (ไม่บังคับ)</label>
+                                    <input
+                                        id="file_share_link_max"
+                                        type="number"
+                                        min="1"
+                                        max="10000"
+                                        bind:value={shareLinkMaxDownloads}
+                                        placeholder="ไม่จำกัด"
+                                        class="input-trust text-xs"
+                                    />
+                                </div>
+                            </div>
+
+                            {#if shareLinkError}
+                                <p class="text-xs text-[#E53E3E] font-medium">{shareLinkError}</p>
+                            {/if}
                         {/if}
-                    </div>
+                    {/if}
 
                     <div class="flex justify-end gap-2 pt-1">
                         <button type="button" onclick={() => (sharingNode = null)} class="btn-secondary">
-                            ยกเลิก
+                            {generatedShareLink ? 'ปิดหน้าต่าง' : 'ยกเลิก'}
                         </button>
-                        <button type="submit" disabled={shareForm.processing} class="btn-primary">
-                            ยืนยันการแชร์
-                        </button>
+                        {#if shareTargetType === 'link'}
+                            {#if !generatedShareLink}
+                                <button type="submit" disabled={shareLinkCreating} class="btn-primary">
+                                    {shareLinkCreating ? 'กำลังสร้างลิงก์...' : 'สร้างลิงก์แชร์'}
+                                </button>
+                            {/if}
+                        {:else}
+                            <button type="submit" disabled={shareForm.processing} class="btn-primary">
+                                ยืนยันการแชร์
+                            </button>
+                        {/if}
                     </div>
                 </form>
             </div>

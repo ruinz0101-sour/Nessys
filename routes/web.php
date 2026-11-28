@@ -9,6 +9,7 @@ use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\FileManagerController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ShareController;
+use App\Http\Controllers\ShareLinkController;
 use App\Http\Controllers\TrashController;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -44,6 +45,8 @@ Route::middleware('auth')->group(function (): void {
     Route::get('/shares', [ShareController::class, 'index'])->name('shares.index');
     Route::post('/shares', [ShareController::class, 'store'])->name('shares.store');
     Route::patch('/shares/{share}/revoke', [ShareController::class, 'revoke'])->name('shares.revoke');
+    Route::post('/share-links', [ShareLinkController::class, 'store'])->name('share-links.store');
+    Route::patch('/share-links/{shareLink}/revoke', [ShareLinkController::class, 'revoke'])->name('share-links.revoke');
 
     // ระบบคำขอสิทธิ์เข้าถึงไฟล์
     Route::get('/access-requests', [AccessRequestController::class, 'index'])->name('access-requests.index');
@@ -83,3 +86,9 @@ Route::middleware('auth')->group(function (): void {
         Route::put('/departments/{department}', [DepartmentController::class, 'update'])->name('departments.update');
     });
 });
+
+// ลิงก์แชร์สาธารณะ (URL Share Link - ไม่ต้องเข้าสู่ระบบ)
+Route::get('/s/{token}', [ShareLinkController::class, 'show'])->name('share-links.show');
+Route::post('/s/{token}/unlock', [ShareLinkController::class, 'unlock'])->name('share-links.unlock');
+Route::get('/s/{token}/download', [ShareLinkController::class, 'download'])->name('share-links.download');
+Route::get('/s/{token}/preview', [ShareLinkController::class, 'preview'])->name('share-links.preview');

@@ -9,6 +9,7 @@ use App\Models\AuditLog;
 use App\Models\Department;
 use App\Models\Node;
 use App\Models\Share;
+use App\Models\ShareLink;
 use App\Models\User;
 use App\Models\UserNotification;
 use Illuminate\Http\RedirectResponse;
@@ -130,9 +131,41 @@ class ShareController extends Controller
             ->orderBy('name')
             ->get(['id', 'name']);
 
+        $shareLinks = ShareLink::query()
+            ->with(['node' => fn ($query) => $query->withTrashed()])
+            ->where('created_by', $user->id)
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(function (ShareLink $link): array {
+                $isExpired = $link->isExpired();
+                $isRevoked = $link->isRevoked();
+                $isLimitReached = $link->isDownloadLimitReached();
+
+                return [
+                    'id' => $link->id,
+                    'token' => $link->token,
+                    'url' => route('share-links.show', ['token' => $link->token]),
+                    'node_id' => $link->node_id,
+                    'node_uuid' => $link->node?->uuid,
+                    'node_name' => $link->node?->name,
+                    'node_type' => $link->node?->type?->value,
+                    'has_password' => $link->hasPassword(),
+                    'max_downloads' => $link->max_downloads,
+                    'download_count' => $link->download_count,
+                    'expires_at' => $link->expires_at?->toIso8601String(),
+                    'revoked_at' => $link->revoked_at?->toIso8601String(),
+                    'is_expired' => $isExpired,
+                    'is_revoked' => $isRevoked,
+                    'is_limit_reached' => $isLimitReached,
+                    'is_active' => $link->isActive() && $link->node !== null && $link->node->deleted_at === null,
+                    'created_at' => $link->created_at?->toIso8601String(),
+                ];
+            });
+
         return Inertia::render('Shares/Index', [
             'sharedWithMe' => $sharedWithMe,
             'sharedByMe' => $sharedByMe,
+            'shareLinks' => $shareLinks,
             'shareableNodes' => $shareableNodes,
             'recipients' => $recipients,
             'departments' => $departments,

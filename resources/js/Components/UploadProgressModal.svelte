@@ -18,6 +18,7 @@ let {
     errorMessage = '',
     quotaInfo = null, // { usedBytes, quotaBytes, remainingBytes, neededBytes }
     canRetry = false,
+    canResume = false,
     onpause = () => {},
     onresume = () => {},
     onminimize = () => {},
@@ -203,7 +204,7 @@ function isImageFile(file) {
                                     <rect x="14" y="4" width="4" height="16" rx="1" />
                                 </svg>
                             </button>
-                        {:else if isPaused}
+                        {:else if isPaused || (status === 'error' && canResume)}
                             <button
                                 type="button"
                                 onclick={onresume}
@@ -384,7 +385,13 @@ function isImageFile(file) {
                                     {#if status === 'success'}
                                         <span class="text-emerald-700 font-semibold">เพิ่มไฟล์เข้าสู่ระบบเรียบร้อยแล้ว ({files.length} รายการ)</span>
                                     {:else if status === 'error'}
-                                        <span class="text-rose-600 font-semibold">เกิดข้อผิดพลาดระหว่างอัปโหลด</span>
+                                        <span class="text-rose-600 font-semibold">
+                                            {#if canResume}
+                                                เกิดข้อผิดพลาดระหว่างอัปโหลด — กด "อัปโหลดต่อ" เพื่อทำต่อจากจุดเดิม
+                                            {:else}
+                                                เกิดข้อผิดพลาดระหว่างอัปโหลด
+                                            {/if}
+                                        </span>
                                     {:else if isPaused}
                                         <span class="text-amber-700 font-semibold">หยุดชั่วคราว — กด "อัปโหลดต่อ" เพื่อทำต่อ</span>
                                     {:else if isSavingOnServer}
@@ -576,6 +583,27 @@ function isImageFile(file) {
                                 รับทราบ
                             </button>
                         {:else if status === 'error'}
+                            {#if canResume}
+                                <button
+                                    type="button"
+                                    onclick={onresume}
+                                    class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition cursor-pointer shadow-xs"
+                                >
+                                    <svg class="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                        <polygon points="6 3 20 12 6 21 6 3" />
+                                    </svg>
+                                    <span>อัปโหลดต่อ</span>
+                                </button>
+                            {/if}
+                            {#if canRetry}
+                                <button
+                                    type="button"
+                                    onclick={onretry}
+                                    class="{canResume ? 'btn-secondary' : 'btn-primary'} text-xs"
+                                >
+                                    {canResume ? 'เริ่มอัปโหลดใหม่' : 'ลองอัปโหลดอีกครั้ง'}
+                                </button>
+                            {/if}
                             <button
                                 type="button"
                                 onclick={onrefresh}
@@ -587,15 +615,6 @@ function isImageFile(file) {
                                 </svg>
                                 <span>รีเฟรชหน้า</span>
                             </button>
-                            {#if canRetry}
-                                <button
-                                    type="button"
-                                    onclick={onretry}
-                                    class="btn-primary text-xs"
-                                >
-                                    ลองอัปโหลดอีกครั้ง
-                                </button>
-                            {/if}
                             <button
                                 type="button"
                                 onclick={onclose}

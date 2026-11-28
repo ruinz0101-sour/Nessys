@@ -473,4 +473,97 @@ class FileManagerTest extends TestCase
         $rangeResponse->assertHeader('Accept-Ranges', 'bytes');
         $rangeResponse->assertHeader('Content-Range', 'bytes 4-7/12');
     }
+
+    public function test_chunked_upload_can_resume_from_interrupted_chunk_and_rejects_missing_part_file(): void
+    {
+        Storage::fake('local');
+
+        $user = User::factory()->create([
+            'quota_bytes' => 1000,
+            'used_bytes' => 0,
+        ]);
+
+        $resumeId = '55555555-5555-4555-8555-555555555555';
+
+        // ส่งชิ้นที่ 0 สำเร็จ
+        $this->actingAs($user)
+            ->postJson('/files/upload/chunk', [
+                'upload_id' => $resumeId,
+                'chunk' => UploadedFile::fake()->createWithContent('resume.mp4', '1111'),
+                'chunk_index' => 0,
+                'total_chunks' => 3,
+                'chunk_offset' => 0,
+                'defer_finalize' => true,
+                'file_name' => 'resume.mp4',
+                'file_size' => 12,
+                'root_type' => RootType::Personal->value,
+                'parent_id' => null,
+            ])
+            ->assertOk();
+
+        // จำลองว่าชิ้นที่ 1 เขียนค้างไปครึ่งเดียว (เช่น พื้นที่ดิสก์เต็มระหว่างเขียน) แล้วผู้ใช้กด "อัปโหลดต่อ" เพื่อส่งชิ้นที่ 1 ใหม่ที่ offset เดิม
+        $partPath = Storage::disk('local')->path("chunks/{$user->id}/{$resumeId}.part");
+        file_put_contents($partPath, '1111XX');
+
+        $this->actingAs($user)
+            ->postJson('/files/upload/chunk', [
+                'upload_id' => $resumeId,
+                'chunk' => UploadedFile::fake()->createWithContent('resume.mp4', '2222'),
+                'chunk_index' => 1,
+                'total_chunks' => 3,
+                'chunk_offset' => 4,
+                'defer_finalize' => true,
+                'file_name' => 'resume.mp4',
+                'file_size' => 12,
+                'root_type' => RootType::Personal->value,
+                'parent_id' => null,
+            ])
+            ->assertOk();
+
+        $this->actingAs($user)
+            ->postJson('/files/upload/chunk', [
+                'upload_id' => $resumeId,
+                'chunk' => UploadedFile::fake()->createWithContent('resume.mp4', '3333'),
+                'chunk_index' => 2,
+                'total_chunks' => 3,
+                'chunk_offset' => 8,
+                'defer_finalize' => true,
+                'file_name' => 'resume.mp4',
+                'file_size' => 12,
+                'root_type' => RootType::Personal->value,
+                'parent_id' => null,
+            ])
+            ->assertOk();
+
+        $this->actingAs($user)
+            ->postJson('/files/upload/chunk/complete', [
+                'upload_id' => $resumeId,
+                'file_name' => 'resume.mp4',
+                'root_type' => RootType::Personal->value,
+                'parent_id' => null,
+            ])
+            ->assertOk()
+            ->assertJson(['status' => 'completed', 'name' => 'resume.mp4']);
+
+        $node = Node::where('name', 'resume.mp4')->firstOrFail();
+        $this->assertSame('111122223333', Storage::disk('local')->get($node->storage_path));
+
+        // หากไฟล์ .part บนเซิร์ฟเวอร์ถูกลบไปแล้ว การส่ง chunk_index > 0 ต้องถูกปฏิเสธด้วย 422 แทนที่จะสร้างไฟล์เสียหาย
+        $missingId = '66666666-6666-4666-8666-666666666666';
+        $this->actingAs($user)
+            ->postJson('/files/upload/chunk', [
+                'upload_id' => $missingId,
+                'chunk' => UploadedFile::fake()->createWithContent('missing.mp4', '2222'),
+                'chunk_index' => 1,
+                'total_chunks' => 3,
+                'chunk_offset' => 4,
+                'defer_finalize' => true,
+                'file_name' => 'missing.mp4',
+                'file_size' => 12,
+                'root_type' => RootType::Personal->value,
+                'parent_id' => null,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['files']);
+    }
 }

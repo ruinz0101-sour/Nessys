@@ -97,6 +97,11 @@ class Node extends Model
         return $this->hasMany(Share::class, 'node_id');
     }
 
+    public function shareLinks(): HasMany
+    {
+        return $this->hasMany(ShareLink::class, 'node_id');
+    }
+
     public function accessRequests(): HasMany
     {
         return $this->hasMany(AccessRequest::class, 'node_id');

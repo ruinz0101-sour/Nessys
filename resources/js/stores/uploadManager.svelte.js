@@ -47,6 +47,7 @@ export const uploadState = $state({
     quotaInfo: null,
     isUploading: false,
     canRetry: false,
+    canResume: false,
 });
 
 const activeUploadXhrs = new Set();
@@ -55,6 +56,7 @@ let uploadCancelled = false;
 let uploadPaused = false;
 let resumeResolvers = [];
 let lastUploadAttempt = null;
+let resumeCheckpoint = null;
 let uploadCloseTimer = null;
 let progressTicker = null;
 
@@ -263,10 +265,36 @@ async function completeChunkUploadRequest({ uploadId, fileName, rootType, parent
     }
 }
 
+function cleanupServerChunk(uploadId) {
+    if (!uploadId) {
+        return;
+    }
+    const xsrf = getXsrfToken();
+    fetch(`/files/upload/chunk/${uploadId}`, {
+        method: 'DELETE',
+        headers: {
+            Accept: 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            ...(xsrf ? { 'X-XSRF-TOKEN': xsrf } : {}),
+        },
+    }).catch(() => {});
+}
+
+function clearResumeCheckpoint({ cleanupServer = false } = {}) {
+    if (cleanupServer && resumeCheckpoint?.uploadId) {
+        cleanupServerChunk(resumeCheckpoint.uploadId);
+    }
+    resumeCheckpoint = null;
+    uploadState.canResume = false;
+}
+
 export function closeUploadModal() {
     if (uploadCloseTimer) {
         clearTimeout(uploadCloseTimer);
         uploadCloseTimer = null;
+    }
+    if (!uploadState.isUploading) {
+        clearResumeCheckpoint({ cleanupServer: true });
     }
     uploadState.open = false;
     uploadState.minimized = false;
@@ -281,6 +309,8 @@ export function showQuotaExceededModal(selected = [], destination = '', { usedBy
         clearTimeout(uploadCloseTimer);
         uploadCloseTimer = null;
     }
+
+    clearResumeCheckpoint({ cleanupServer: true });
 
     const neededBytes = selected.reduce((sum, file) => sum + (file.size || 0), 0);
     const remaining = quotaBytes > 0 ? Math.max(0, quotaBytes - usedBytes) : 0;
@@ -342,15 +372,21 @@ export function pauseUpload() {
 }
 
 export function resumeUpload() {
-    if (!uploadState.isUploading || !uploadPaused || uploadCancelled) {
+    if (uploadState.isUploading && uploadPaused && !uploadCancelled) {
+        uploadPaused = false;
+        segmentStartedAt = performance.now();
+        uploadState.status = 'uploading';
+        startTimingTicker();
+        flushResumeResolvers();
         return;
     }
 
-    uploadPaused = false;
-    segmentStartedAt = performance.now();
-    uploadState.status = 'uploading';
-    startTimingTicker();
-    flushResumeResolvers();
+    if (!uploadState.isUploading && uploadState.status === 'error' && resumeCheckpoint) {
+        const checkpoint = resumeCheckpoint;
+        resumeCheckpoint = null;
+        uploadState.canResume = false;
+        executeUploadSession(checkpoint.selected, checkpoint.options, checkpoint);
+    }
 }
 
 export function togglePauseUpload() {
@@ -374,17 +410,8 @@ export function cancelUpload() {
     }
     activeUploadXhrs.clear();
 
-    if (cancellingId) {
-        const xsrf = getXsrfToken();
-        fetch(`/files/upload/chunk/${cancellingId}`, {
-            method: 'DELETE',
-            headers: {
-                Accept: 'application/json',
-                'X-Requested-With': 'XMLHttpRequest',
-                ...(xsrf ? { 'X-XSRF-TOKEN': xsrf } : {}),
-            },
-        }).catch(() => {});
-    }
+    cleanupServerChunk(cancellingId);
+    clearResumeCheckpoint({ cleanupServer: true });
 
     uploadState.isUploading = false;
     activeUploadId = null;
@@ -395,6 +422,7 @@ export function retryUpload() {
     if (!lastUploadAttempt || uploadState.isUploading) {
         return;
     }
+    clearResumeCheckpoint({ cleanupServer: true });
     startUpload(lastUploadAttempt.selected, lastUploadAttempt.options);
 }
 
@@ -402,7 +430,21 @@ export function refreshPage() {
     window.location.reload();
 }
 
-export async function startUpload(
+export async function startUpload(selected, options) {
+    if (uploadState.isUploading) {
+        uploadState.open = true;
+        uploadState.minimized = false;
+        if (options?.resetInput) {
+            options.resetInput();
+        }
+        return;
+    }
+
+    clearResumeCheckpoint({ cleanupServer: true });
+    return executeUploadSession(selected, options, null);
+}
+
+async function executeUploadSession(
     selected,
     {
         rootType,
@@ -412,31 +454,21 @@ export async function startUpload(
         usedBytes = 0,
         onSuccessExtra = null,
         resetInput = null,
-    }
+    },
+    resumeFrom = null
 ) {
-    if (uploadState.isUploading) {
-        uploadState.open = true;
-        uploadState.minimized = false;
-        if (resetInput) {
-            resetInput();
-        }
-        return;
-    }
-
     if (uploadCloseTimer) {
         clearTimeout(uploadCloseTimer);
         uploadCloseTimer = null;
     }
 
-    lastUploadAttempt = {
-        selected,
-        options: { rootType, parentId, destination, quotaBytes, usedBytes, onSuccessExtra, resetInput },
-    };
+    const options = { rootType, parentId, destination, quotaBytes, usedBytes, onSuccessExtra, resetInput };
+    lastUploadAttempt = { selected, options };
     uploadState.canRetry = selected.length > 0;
 
     const totalSize = selected.reduce((sum, file) => sum + (file.size || 0), 0);
 
-    if (quotaBytes > 0 && (usedBytes + totalSize) > quotaBytes) {
+    if (!resumeFrom && quotaBytes > 0 && (usedBytes + totalSize) > quotaBytes) {
         if (resetInput) {
             resetInput();
         }
@@ -447,21 +479,32 @@ export async function startUpload(
     uploadCancelled = false;
     uploadPaused = false;
     resumeResolvers = [];
-    accumulatedActiveMs = 0;
+    accumulatedActiveMs = resumeFrom ? (resumeFrom.accumulatedActiveMs || 0) : 0;
     segmentStartedAt = performance.now();
+
+    const startFileIndex = resumeFrom ? resumeFrom.fileIndex : 0;
+    let completedFilesBytes = resumeFrom ? resumeFrom.completedFilesBytes : 0;
+    let uploadedCount = resumeFrom ? resumeFrom.uploadedCount : 0;
+
+    const initialLoadedBytes = resumeFrom
+        ? Math.min(totalSize, completedFilesBytes + (resumeFrom.chunkIndex * resumeFrom.chunkSizeBytes))
+        : 0;
+    const initialPercentage = totalSize > 0
+        ? Math.min(100, Math.round((initialLoadedBytes / totalSize) * 100))
+        : 0;
 
     uploadState.isUploading = true;
     uploadState.open = true;
     uploadState.minimized = false;
     uploadState.status = 'uploading';
-    uploadState.percentage = 0;
-    uploadState.loadedBytes = 0;
+    uploadState.percentage = initialPercentage;
+    uploadState.loadedBytes = initialLoadedBytes;
     uploadState.totalBytes = totalSize;
     uploadState.speedBytesPerSec = 0;
-    uploadState.elapsedSeconds = 0;
+    uploadState.elapsedSeconds = Math.floor(accumulatedActiveMs / 1000);
     uploadState.remainingSeconds = null;
     uploadState.estimatedFinishAt = null;
-    uploadState.startedClockAt = Date.now();
+    uploadState.startedClockAt = resumeFrom ? (uploadState.startedClockAt || Date.now()) : Date.now();
     uploadState.finishedClockAt = null;
     uploadState.files = selected.map((file) => ({
         name: file.name,
@@ -471,25 +514,49 @@ export async function startUpload(
     uploadState.destination = destination;
     uploadState.errorMessage = '';
     uploadState.quotaInfo = null;
+    uploadState.canResume = false;
 
     startTimingTicker();
 
-    let completedFilesBytes = 0;
-    let uploadedCount = 0;
+    let currentFileIndex = startFileIndex;
+    let currentChunkIndex = resumeFrom ? resumeFrom.chunkIndex : 0;
+    let currentChunkSizeBytes = resumeFrom ? resumeFrom.chunkSizeBytes : 0;
+    let currentTotalChunks = resumeFrom ? resumeFrom.totalChunks : 0;
 
     try {
-        for (const file of selected) {
+        for (let fileIndex = startFileIndex; fileIndex < selected.length; fileIndex += 1) {
+            currentFileIndex = fileIndex;
+            const file = selected[fileIndex];
+
             await waitWhilePaused();
             if (uploadCancelled) {
                 break;
             }
 
-            const uploadId = generateUploadId();
+            const isResumingThisFile = resumeFrom !== null && fileIndex === startFileIndex;
+            const uploadId = isResumingThisFile && resumeFrom.uploadId
+                ? resumeFrom.uploadId
+                : generateUploadId();
             activeUploadId = uploadId;
-            const chunkSizeBytes = getChunkSizeForFile(file.size || 0);
+
+            const chunkSizeBytes = isResumingThisFile && resumeFrom.chunkSizeBytes
+                ? resumeFrom.chunkSizeBytes
+                : getChunkSizeForFile(file.size || 0);
             const totalChunks = Math.max(1, Math.ceil((file.size || 0) / chunkSizeBytes));
+            const startChunkIndex = isResumingThisFile ? resumeFrom.chunkIndex : 0;
+
+            currentChunkSizeBytes = chunkSizeBytes;
+            currentTotalChunks = totalChunks;
+            currentChunkIndex = startChunkIndex;
+
             const isMultiChunk = totalChunks > 1;
             const chunkLoadedMap = new Map();
+            // กรณีอัปโหลดต่อจากจุดเดิม ให้เก็บขนาดชิ้นส่วนที่อัปโหลดสำเร็จไปแล้วไว้ในแผนที่ความคืบหน้า
+            for (let doneIdx = 0; doneIdx < startChunkIndex; doneIdx += 1) {
+                const start = doneIdx * chunkSizeBytes;
+                const end = Math.min(file.size || 0, start + chunkSizeBytes);
+                chunkLoadedMap.set(doneIdx, Math.max(0, end - start));
+            }
             let lastUiUpdateAt = 0;
 
             const updateProgress = (force = false) => {
@@ -589,7 +656,8 @@ export async function startUpload(
             };
 
             // ส่งทีละชิ้นตามลำดับ เพื่อป้องกันการแย่ง socket บน PHP server และลดโอกาส connection reset ในไฟล์ขนาดใหญ่
-            for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+            for (let chunkIndex = startChunkIndex; chunkIndex < totalChunks; chunkIndex += 1) {
+                currentChunkIndex = chunkIndex;
                 if (uploadCancelled) {
                     break;
                 }
@@ -597,6 +665,7 @@ export async function startUpload(
             }
 
             if (isMultiChunk && !uploadCancelled) {
+                currentChunkIndex = totalChunks;
                 await waitWhilePaused();
                 if (!uploadCancelled) {
                     await completeChunkUploadRequest({
@@ -623,6 +692,7 @@ export async function startUpload(
         }
 
         stopTimingTicker();
+        clearResumeCheckpoint({ cleanupServer: false });
         const finalElapsedSec = Math.floor(getActiveElapsedMs() / 1000);
         uploadState.elapsedSeconds = finalElapsedSec;
         uploadState.remainingSeconds = 0;
@@ -661,22 +731,33 @@ export async function startUpload(
             xhr.abort();
         }
         activeUploadXhrs.clear();
-        if (activeUploadId) {
-            const xsrf = getXsrfToken();
-            fetch(`/files/upload/chunk/${activeUploadId}`, {
-                method: 'DELETE',
-                headers: {
-                    Accept: 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    ...(xsrf ? { 'X-XSRF-TOKEN': xsrf } : {}),
-                },
-            }).catch(() => {});
-        }
 
         const message = err?.message || 'เกิดข้อผิดพลาดระหว่างอัปโหลด กรุณาตรวจสอบขนาดไฟล์หรือการเชื่อมต่อแล้วลองใหม่อีกครั้ง';
         if (message.includes('พื้นที่จัดเก็บ') || message.includes('ไม่เพียงพอ')) {
+            cleanupServerChunk(activeUploadId);
             showQuotaExceededModal(selected, destination, { usedBytes, quotaBytes }, message);
         } else {
+            const hasResumableProgress = (currentFileIndex > 0 || currentChunkIndex > 0) && activeUploadId !== null;
+            if (hasResumableProgress) {
+                // เก็บไฟล์ .part บนเซิร์ฟเวอร์และบันทึกจุดค้างไว้ เพื่อให้ผู้ใช้กด "อัปโหลดต่อ" จากจุดเดิมได้ทันที
+                resumeCheckpoint = {
+                    selected,
+                    options,
+                    fileIndex: currentFileIndex,
+                    uploadId: activeUploadId,
+                    chunkIndex: currentChunkIndex,
+                    chunkSizeBytes: currentChunkSizeBytes,
+                    totalChunks: currentTotalChunks,
+                    completedFilesBytes,
+                    uploadedCount,
+                    accumulatedActiveMs: getActiveElapsedMs(),
+                };
+                uploadState.canResume = true;
+            } else {
+                cleanupServerChunk(activeUploadId);
+                clearResumeCheckpoint({ cleanupServer: false });
+            }
+
             uploadState.status = 'error';
             uploadState.errorMessage = message;
             uploadState.minimized = false;

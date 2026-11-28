@@ -488,9 +488,9 @@ class FileManagerController extends Controller
                     'files' => ['พื้นที่จัดเก็บเต็มหรือไม่เพียงพอสำหรับการอัปโหลดไฟล์นี้'],
                 ]);
             }
-        } elseif ($chunkOffset === null && ! is_file($partPath)) {
+        } elseif (! is_file($partPath)) {
             throw ValidationException::withMessages([
-                'files' => ['ไม่พบข้อมูลชิ้นส่วนไฟล์ก่อนหน้า กรุณาอัปโหลดใหม่อีกครั้ง'],
+                'files' => ['ไม่พบข้อมูลชิ้นส่วนไฟล์ชั่วคราวบนเซิร์ฟเวอร์ กรุณากด "เริ่มอัปโหลดใหม่"'],
             ]);
         }
 

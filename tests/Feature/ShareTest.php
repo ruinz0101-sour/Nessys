@@ -7,10 +7,13 @@ use App\Enums\SharePermission;
 use App\Models\Department;
 use App\Models\Node;
 use App\Models\Share;
+use App\Models\ShareLink;
 use App\Models\User;
 use App\Models\UserNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class ShareTest extends TestCase
@@ -174,5 +177,75 @@ class ShareTest extends TestCase
             'user_id' => $financeUser->id,
             'type' => 'file_shared',
         ]);
+    }
+
+    public function test_owner_can_create_public_url_share_link_with_password_limit_and_revoke(): void
+    {
+        Storage::fake('local');
+
+        $owner = User::factory()->create();
+        $stranger = User::factory()->create();
+
+        $uploaded = UploadedFile::fake()->createWithContent('public-doc.txt', 'hello via url');
+        $this->actingAs($owner)->post('/files/upload', [
+            'files' => [$uploaded],
+            'root_type' => RootType::Personal->value,
+            'parent_id' => null,
+        ])->assertSessionHasNoErrors();
+
+        $node = Node::where('name', 'public-doc.txt')->firstOrFail();
+
+        // คนอื่นที่ไม่ใช่เจ้าของห้ามสร้างลิงก์แชร์
+        $this->actingAs($stranger)->postJson('/share-links', [
+            'node_id' => $node->id,
+        ])->assertForbidden();
+
+        // เจ้าของสร้างลิงก์แชร์พร้อมรหัสผ่านและจำกัดดาวน์โหลด 1 ครั้ง
+        $response = $this->actingAs($owner)->postJson('/share-links', [
+            'node_id' => $node->id,
+            'password' => 'secret123',
+            'max_downloads' => 1,
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('share_link.has_password', true)
+            ->assertJsonPath('share_link.max_downloads', 1);
+
+        $token = (string) $response->json('share_link.token');
+        $shareLink = ShareLink::where('token', $token)->firstOrFail();
+
+        // ผู้เยี่ยมชมที่ไม่ได้ล็อกอิน: เปิดดูได้ (แต่ต้องกรอกรหัสผ่านก่อนดาวน์โหลด)
+        $this->app['auth']->forgetGuards();
+        $this->get("/s/{$token}")->assertOk();
+        $this->get("/s/{$token}/download")->assertForbidden();
+
+        // กรอกรหัสผ่านผิด
+        $this->post("/s/{$token}/unlock", ['password' => 'wrong'])
+            ->assertSessionHasErrors('password');
+
+        // กรอกรหัสผ่านถูก -> ดาวน์โหลดได้ 1 ครั้ง
+        $this->post("/s/{$token}/unlock", ['password' => 'secret123'])
+            ->assertRedirect("/s/{$token}");
+
+        $downloadResponse = $this->get("/s/{$token}/download");
+        $downloadResponse->assertOk();
+        $this->assertSame('hello via url', $downloadResponse->streamedContent());
+        $this->assertSame(1, $shareLink->fresh()->download_count);
+
+        // ดาวน์โหลดครั้งที่ 2 เกิน max_downloads -> ถูกบล็อก
+        $this->get("/s/{$token}/download")->assertNotFound();
+
+        // ทดสอบเพิกถอนลิงก์
+        $activeLink = ShareLink::factory()->create([
+            'node_id' => $node->id,
+            'created_by' => $owner->id,
+        ]);
+
+        $this->actingAs($owner)
+            ->patch("/share-links/{$activeLink->id}/revoke")
+            ->assertRedirect();
+
+        $this->assertNotNull($activeLink->fresh()->revoked_at);
+        $this->get("/s/{$activeLink->token}/download")->assertNotFound();
     }
 }

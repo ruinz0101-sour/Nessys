@@ -409,6 +409,7 @@ function markOneRead(n) {
         errorMessage={uploadState.errorMessage}
         quotaInfo={uploadState.quotaInfo}
         canRetry={uploadState.canRetry}
+        canResume={uploadState.canResume}
         onpause={pauseUpload}
         onresume={resumeUpload}
         onminimize={toggleMinimizeUpload}
